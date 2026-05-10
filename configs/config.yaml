@@ -1,0 +1,223 @@
+server:
+  port: 8080
+  mode: debug  # debug, release, test
+  encryption_key: ""  # hex-encoded 32-byte key for AES-256-GCM (generate: openssl rand -hex 32)
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: postgres
+  dbname: ai_gateway
+  sslmode: disable
+  # High-concurrency pool settings
+  max_open_conns: 200      # Increased for burst traffic
+  max_idle_conns: 50       # Keep more idle connections ready
+  conn_max_lifetime: 30m   # Shorter lifetime to refresh connections
+  conn_max_idle_time: 5m   # Close truly idle connections faster
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+  pool_size: 200           # Match database pool size
+  min_idle_conns: 20       # Keep minimum connections ready
+  max_retries: 3           # Retry on transient failures
+  dial_timeout: 5s
+  read_timeout: 3s
+  write_timeout: 3s
+
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+    timeout: 120s
+  claude:
+    base_url: https://api.anthropic.com/v1
+    api_key: ${ANTHROPIC_API_KEY}
+    timeout: 120s
+  gemini:
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    api_key: ${GEMINI_API_KEY}
+    timeout: 120s
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key: ${DEEPSEEK_API_KEY}
+    timeout: 120s
+  glm:
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    api_key: ${GLM_API_KEY}
+    timeout: 120s
+
+billing:
+  default_currency: USD
+  min_balance_alert: 10.00
+
+rate_limit:
+  default_user_rps: 50      # Per-user requests per second
+  default_user_burst: 100   # Burst allowance for user
+  default_tenant_rps: 500   # Per-tenant requests per second
+  default_tenant_burst: 1000 # Burst allowance for tenant
+  redis_key_prefix: "ratelimit:"
+  window_size: 1s
+
+logging:
+  level: info
+  format: json
+  output: stdout
+
+admin:
+  default_tenant_slug: "admin-tenant"
+  super_admin_email: "admin@open-station.local"
+  # WARNING: Change these default credentials immediately after first startup!
+  # Use env vars ADMIN_USER / ADMIN_PASS to override or change here.
+  default_admin_user: ${ADMIN_USER:-admin}
+  default_admin_pass: ${ADMIN_PASS:-changeme123}
+  initial_api_key_name: "Initial Manager Key"
+
+safe:
+  enabled: true
+  ip_rate_limit:
+    rps: 100
+    burst: 200
+  ip_blacklist: []
+  ip_whitelist:
+    - "127.0.0.1"
+    - "::1"
+  body_size_limit_mb: 10
+  failed_auth:
+    max_attempts: 10
+    window_s: 300
+    block_duration_s: 900
+  redis_key_prefix: "safe:"
+  allowed_methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+    - HEAD
+  max_header_size_kb: 16
+  block_empty_user_agent: true
+  blocked_user_agents: []
+  max_concurrent_conns: 1000  # Increased for high concurrency
+  path_traversal_check: true
+  burst_auto_block:
+    enabled: true
+    burst_factor: 5
+    block_duration_s: 600
+  enforce_content_type: true
+  max_url_length: 2048
+  max_query_length: 1024
+  block_suspicious_headers: true
+  max_single_header_kb: 8
+  rate_violation_block:
+    enabled: true
+    max_violations: 5
+    window_s: 120
+    block_duration_s: 600
+
+# Load Balancer Configuration
+# Strategy options:
+#   - priority: Select based on configured priority (default)
+#   - round_robin: Distribute evenly across all accounts
+#   - weighted_round_robin: Distribute based on weight and health
+#   - least_connections: Select account with fewest active connections
+#   - least_response_time: Select account with lowest latency
+#   - health_score: Select account with highest health score
+#   - random: Random selection
+#   - adaptive: AI-driven multi-factor optimization (recommended for production)
+load_balancer:
+  strategy: "adaptive"                    # Recommended: adaptive for production
+  cooldown_duration: 10s                  # Wait time after error before retry
+  health_check_interval: 30s              # Health score recalculation interval
+  default_weight: 1                       # Default weight for weighted strategies
+  max_connections_per_account: 100        # Max concurrent connections per account
+  adaptive_weights:
+    health_score: 0.3                     # Weight for health factor
+    latency_score: 0.25                   # Weight for latency factor
+    success_rate: 0.25                    # Weight for success rate factor
+    connection_score: 0.15                # Weight for connection count factor
+    load_score: 0.05                      # Weight for usage/load factor
+
+# Plugin System Configuration
+plugins:
+  enabled: true                           # Enable plugin system
+  plugin_dir: "./plugins"                 # Directory for .so plugin files
+  allow_native_plugins: true              # Allow Go native .so plugins (security consideration)
+  sandbox:
+    enabled: true                         # Enable plugin sandboxing
+    allowed_networks:
+      - "*"                               # Allowed network destinations
+    max_memory_mb: 512                    # Max memory per plugin
+    timeout_seconds: 120                  # Plugin execution timeout
+
+  # Available plugins from marketplace (local config-based)
+  # These can be installed via MCP tools or admin API
+  available_plugins:
+    mistral:
+      name: "Mistral AI"
+      version: "1.0.0"
+      type: "adapter"
+      provider: "mistral"
+      description: "Mistral AI API integration (Mistral Large, Mistral Medium)"
+      author: "Open Station Team"
+      adapter_url: "${MISTRAL_ADAPTER_URL:-http://localhost:8081}"
+      capabilities:
+        - chat
+        - stream
+        - embedding
+      config_schema:
+        type: object
+        properties:
+          base_url:
+            type: string
+            description: "Mistral API base URL"
+            default: "https://api.mistral.ai/v1"
+          api_key:
+            type: string
+            description: "Mistral API key"
+            required: true
+          timeout:
+            type: integer
+            description: "Request timeout in seconds"
+            default: 30
+
+    cohere:
+      name: "Cohere"
+      version: "2.1.0"
+      type: "adapter"
+      provider: "cohere"
+      description: "Cohere API integration (Command, Embed, Rerank)"
+      author: "Open Station Team"
+      adapter_url: "${COHERE_ADAPTER_URL:-http://localhost:8082}"
+      capabilities:
+        - chat
+        - embedding
+        - rerank
+      config_schema:
+        type: object
+        properties:
+          base_url:
+            type: string
+            description: "Cohere API base URL"
+            default: "https://api.cohere.ai/v1"
+          api_key:
+            type: string
+            description: "Cohere API key"
+            required: true
+
+    # Additional plugins can be added here
+    # Example for custom adapter:
+    # custom_provider:
+    #   name: "Custom Provider"
+    #   version: "1.0.0"
+    #   type: "adapter"
+    #   provider: "custom"
+    #   description: "Custom LLM provider integration"
+    #   author: "Your Team"
+    #   adapter_url: "http://localhost:8083"
+    #   capabilities:
+    #     - chat
+    #     - stream

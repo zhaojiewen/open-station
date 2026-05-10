@@ -1,0 +1,550 @@
+package handler
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+	"github.com/xuhaiqing/open-station/internal/application/service"
+	"github.com/xuhaiqing/open-station/internal/domain/entity"
+	"github.com/xuhaiqing/open-station/internal/infrastructure/auth"
+	"github.com/xuhaiqing/open-station/internal/infrastructure/proxy"
+	"github.com/xuhaiqing/open-station/pkg/circuit"
+	"github.com/xuhaiqing/open-station/pkg/config"
+	"github.com/xuhaiqing/open-station/pkg/logger"
+	"github.com/xuhaiqing/open-station/pkg/metrics"
+	"go.uber.org/zap"
+)
+
+// DynamicProxyHandler 支持动态账户切换的代理处理器
+type DynamicProxyHandler struct {
+	staticProxy       *proxy.ProxyService
+	accountManager    *service.ProviderAccountManager // 使用增强的账户管理器
+	accountService    *service.ProviderAccountService // 兼容旧的接口
+	httpClient        *proxy.HTTPClientWrapper
+	providersConfig   *config.ProvidersConfig
+	circuitManager    *circuit.Manager                // Circuit breaker for failover
+	metrics           *metrics.Metrics                // Metrics collector
+	streamBufferPool  sync.Pool                       // Buffer pool for streaming
+	asyncBilling      *service.AsyncBillingQueue      // Async billing queue
+	billingService    *service.BillingService         // Billing service
+	authService       *auth.AuthService               // Auth service
+}
+
+// NewDynamicProxyHandler 创建动态代理处理器
+func NewDynamicProxyHandler(staticProxy *proxy.ProxyService, accountManager *service.ProviderAccountManager, accountService *service.ProviderAccountService, cfg *config.ProvidersConfig, asyncBilling *service.AsyncBillingQueue, billingService *service.BillingService, authService *auth.AuthService) *DynamicProxyHandler {
+	return &DynamicProxyHandler{
+		staticProxy:     staticProxy,
+		accountManager:  accountManager,
+		accountService:  accountService,
+		httpClient:      proxy.NewHTTPClientWrapper(120 * time.Second),
+		providersConfig: cfg,
+		circuitManager:  circuit.NewManager(),
+		metrics:         metrics.GetGlobalMetrics(),
+		streamBufferPool: sync.Pool{
+			New: func() interface{} {
+				buf := make([]byte, 32*1024) // 32KB for streaming
+				return &buf
+			},
+		},
+		asyncBilling:   asyncBilling,
+		billingService: billingService,
+		authService:    authService,
+	}
+}
+
+// ExecuteRequest 执行请求，支持动态账户切换
+func (h *DynamicProxyHandler) ExecuteRequest(ctx context.Context, req *proxy.ProxyRequest, authService *auth.AuthService, key *entity.APIKey, tenant *entity.Tenant, billingService *service.BillingService) (*proxy.ProxyResponse, error) {
+	// 如果有账户服务，尝试使用动态账户
+	if h.accountService != nil {
+		return h.executeWithDynamicAccount(ctx, req, authService, key, tenant, billingService)
+	}
+
+	// 使用静态配置的 ProxyService
+	return h.staticProxy.ChatCompletion(ctx, req)
+}
+
+// ExecuteStreamRequest 执行流式请求，支持动态账户切换
+func (h *DynamicProxyHandler) ExecuteStreamRequest(ctx context.Context, req *proxy.ProxyRequest, authService *auth.AuthService, key *entity.APIKey, tenant *entity.Tenant) (proxy.StreamReader, error) {
+	// 如果有账户服务，尝试使用动态账户
+	if h.accountService != nil {
+		return h.executeStreamWithDynamicAccount(ctx, req, authService, key, tenant)
+	}
+
+	// 使用静态配置的 ProxyService
+	return h.staticProxy.StreamChatCompletion(ctx, req)
+}
+
+// executeWithDynamicAccount 使用动态账户执行请求（增强版，支持实时切换）
+func (h *DynamicProxyHandler) executeWithDynamicAccount(ctx context.Context, req *proxy.ProxyRequest, authService *auth.AuthService, key *entity.APIKey, tenant *entity.Tenant, billingService *service.BillingService) (*proxy.ProxyResponse, error) {
+	// 优先使用增强的账户管理器
+	if h.accountManager != nil {
+		return h.executeWithAccountManager(ctx, req, authService, key, tenant, billingService)
+	}
+
+	// 兼容旧的账户服务
+	if h.accountService != nil {
+		return h.executeWithOldAccountService(ctx, req, authService, key, tenant, billingService)
+	}
+
+	// 使用静态配置的 ProxyService
+	return h.staticProxy.ChatCompletion(ctx, req)
+}
+
+// executeWithAccountManager 使用增强账户管理器执行请求
+func (h *DynamicProxyHandler) executeWithAccountManager(ctx context.Context, req *proxy.ProxyRequest, authService *auth.AuthService, key *entity.APIKey, tenant *entity.Tenant, billingService *service.BillingService) (*proxy.ProxyResponse, error) {
+	start := time.Now()
+
+	// Record active request
+	h.metrics.IncrementActiveRequests()
+	defer h.metrics.DecrementActiveRequests()
+
+	// 获取当前活跃账户（支持缓存和智能选择）
+	account, err := h.accountManager.GetActiveAccount(ctx, req.Provider)
+	if err != nil {
+		// 没有动态账户配置，使用静态配置
+		logger.Info("No dynamic account, using static config",
+			zap.String("provider", req.Provider),
+			zap.Error(err))
+
+		// Apply circuit breaker to static proxy
+		cb := h.circuitManager.Get(req.Provider)
+		if cbErr := cb.Allow(); cbErr != nil {
+			h.metrics.RecordCircuitState(req.Provider, cb.State().String())
+			return nil, cbErr
+		}
+
+		resp, err := h.staticProxy.ChatCompletion(ctx, req)
+		latency := time.Since(start)
+		h.metrics.RecordProviderRequest(req.Provider, err == nil, latency)
+
+		if err != nil {
+			cb.RecordFailure()
+			h.metrics.RecordCircuitFailure(req.Provider)
+		} else {
+			cb.RecordSuccess()
+			h.metrics.RecordCircuitSuccess(req.Provider)
+		}
+		return resp, err
+	}
+
+	logger.Info("Using dynamic account",
+		zap.String("provider", req.Provider),
+		zap.String("account_name", account.Name),
+		zap.String("account_id", account.ID.String()),
+		zap.Int("priority", account.Priority))
+
+	// Circuit breaker for specific account
+	accountKey := req.Provider + ":" + account.ID.String()
+	cb := h.circuitManager.Get(accountKey)
+	if cbErr := cb.Allow(); cbErr != nil {
+		// Try failover to next account
+		return h.tryFailoverAccount(ctx, req, account.ID)
+	}
+
+	// 构建请求配置
+	accountConfig := h.buildAccountConfig(account)
+
+	// 创建临时客户端并执行请求
+	response, err := h.httpClient.ChatCompletion(ctx, accountConfig, req)
+	latency := time.Since(start)
+	h.metrics.RecordProviderRequest(req.Provider, err == nil, latency)
+
+	if err != nil {
+		cb.RecordFailure()
+		h.metrics.RecordCircuitFailure(req.Provider)
+		h.metrics.RecordCircuitState(req.Provider, cb.State().String())
+
+		// 处理账户失败，实时切换到备用账户
+		errMsg := err.Error()
+
+		// 立即切换到备用账户
+		newAccount, switchErr := h.accountManager.HandleAccountFailure(ctx, req.Provider, account.ID, errMsg)
+		if switchErr != nil {
+			logger.Error("Failed to switch to backup account",
+				zap.String("provider", req.Provider),
+				zap.Error(switchErr))
+			return nil, err
+		}
+
+		// 使用新账户重试请求
+		logger.Info("Retrying with new account",
+			zap.String("provider", req.Provider),
+			zap.String("new_account_id", newAccount.ID.String()),
+			zap.String("new_account_name", newAccount.Name))
+
+		newAccountConfig := h.buildAccountConfig(newAccount)
+		retryResponse, retryErr := h.httpClient.ChatCompletion(ctx, newAccountConfig, req)
+		if retryErr != nil {
+			h.accountManager.HandleAccountFailure(ctx, req.Provider, newAccount.ID, retryErr.Error())
+			return nil, retryErr
+		}
+
+		// 成功，记录成本
+		cost := h.calculateCost(req.Provider, req.Model, retryResponse.Usage.PromptTokens, retryResponse.Usage.CompletionTokens)
+		h.accountService.RecordSuccess(ctx, newAccount.ID, cost)
+
+		// Record success for new account's circuit breaker
+		newCb := h.circuitManager.Get(req.Provider + ":" + newAccount.ID.String())
+		newCb.RecordSuccess()
+		h.metrics.RecordCircuitSuccess(req.Provider)
+
+		return retryResponse, nil
+	}
+
+	// 记录成功和成本
+	cb.RecordSuccess()
+	h.metrics.RecordCircuitSuccess(req.Provider)
+	cost := h.calculateCost(req.Provider, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens)
+	h.accountService.RecordSuccess(ctx, account.ID, cost)
+
+	return response, nil
+}
+
+// tryFailoverAccount tries to use alternative accounts when circuit is open
+func (h *DynamicProxyHandler) tryFailoverAccount(ctx context.Context, req *proxy.ProxyRequest, excludeID uuid.UUID) (*proxy.ProxyResponse, error) {
+	// Get all active accounts
+	accounts, err := h.accountManager.GetActiveAccounts(ctx, req.Provider)
+	if err != nil || len(accounts) <= 1 {
+		return nil, circuit.ErrCircuitOpen
+	}
+
+	// Try accounts in priority order, skipping the failed one
+	for _, account := range accounts {
+		if account.ID == excludeID {
+			continue
+		}
+
+		accountKey := req.Provider + ":" + account.ID.String()
+		cb := h.circuitManager.Get(accountKey)
+
+		if cbErr := cb.Allow(); cbErr != nil {
+			continue // This account's circuit is also open
+		}
+
+		accountConfig := h.buildAccountConfig(account)
+		resp, err := h.httpClient.ChatCompletion(ctx, accountConfig, req)
+
+		if err != nil {
+			cb.RecordFailure()
+			continue
+		}
+
+		cb.RecordSuccess()
+		cost := h.calculateCost(req.Provider, req.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+		h.accountService.RecordSuccess(ctx, account.ID, cost)
+
+		return resp, nil
+	}
+
+	return nil, circuit.ErrCircuitOpen
+}
+
+// executeWithOldAccountService 使用旧账户服务执行请求（兼容）
+func (h *DynamicProxyHandler) executeWithOldAccountService(ctx context.Context, req *proxy.ProxyRequest, authService *auth.AuthService, key *entity.APIKey, tenant *entity.Tenant, billingService *service.BillingService) (*proxy.ProxyResponse, error) {
+	// 获取活跃账户
+	account, err := h.accountService.GetActiveAccount(ctx, req.Provider)
+	if err != nil {
+		// 没有动态账户配置，使用静态配置
+		logger.Info("No dynamic account, using static config",
+			zap.String("provider", req.Provider),
+			zap.Error(err))
+		return h.staticProxy.ChatCompletion(ctx, req)
+	}
+
+	logger.Info("Using dynamic account",
+		zap.String("provider", req.Provider),
+		zap.String("account_name", account.Name),
+		zap.String("account_id", account.ID.String()),
+		zap.Int("priority", account.Priority))
+
+	// 构建请求配置
+	accountConfig := h.buildAccountConfig(account)
+
+	// 创建临时客户端并执行请求
+	response, err := h.httpClient.ChatCompletion(ctx, accountConfig, req)
+	if err != nil {
+		// 记录错误
+		errMsg := err.Error()
+		h.accountService.RecordError(ctx, account.ID, errMsg)
+
+		// 检查是否需要切换账户
+		if h.accountService.IsRateLimitError(errMsg) {
+			logger.Warn("Rate limit detected, switching account",
+				zap.String("provider", req.Provider),
+				zap.String("account_id", account.ID.String()))
+			
+			h.accountService.HandleRateLimit(ctx, account.ID)
+			// 重试一次（使用新账户）
+			return h.executeWithDynamicAccount(ctx, req, authService, key, tenant, billingService)
+		} else if h.accountService.IsQuotaError(errMsg) {
+			logger.Warn("Insufficient quota detected, switching account",
+				zap.String("provider", req.Provider),
+				zap.String("account_id", account.ID.String()))
+			
+			h.accountService.HandleInsufficientQuota(ctx, account.ID)
+			// 重试一次（使用新账户）
+			return h.executeWithDynamicAccount(ctx, req, authService, key, tenant, billingService)
+		}
+
+		return nil, err
+	}
+
+	// 记录成功和成本
+	cost := h.calculateCost(req.Provider, req.Model, response.Usage.PromptTokens, response.Usage.CompletionTokens)
+	h.accountService.RecordSuccess(ctx, account.ID, cost)
+
+	return response, nil
+}
+
+// executeStreamWithDynamicAccount 使用动态账户执行流式请求（增强版，支持实时切换）
+func (h *DynamicProxyHandler) executeStreamWithDynamicAccount(ctx context.Context, req *proxy.ProxyRequest, authService *auth.AuthService, key *entity.APIKey, tenant *entity.Tenant) (proxy.StreamReader, error) {
+	// 优先使用增强的账户管理器
+	if h.accountManager != nil {
+		return h.executeStreamWithAccountManager(ctx, req, authService, key, tenant)
+	}
+
+	// 兼容旧的账户服务
+	if h.accountService != nil {
+		return h.executeStreamWithOldAccountService(ctx, req, authService, key, tenant)
+	}
+
+	// 使用静态配置
+	return h.staticProxy.StreamChatCompletion(ctx, req)
+}
+
+// executeStreamWithAccountManager 使用增强账户管理器执行流式请求
+func (h *DynamicProxyHandler) executeStreamWithAccountManager(ctx context.Context, req *proxy.ProxyRequest, authService *auth.AuthService, key *entity.APIKey, tenant *entity.Tenant) (proxy.StreamReader, error) {
+	start := time.Now()
+
+	h.metrics.IncrementActiveRequests()
+
+	// 获取当前活跃账户
+	account, err := h.accountManager.GetActiveAccount(ctx, req.Provider)
+	if err != nil {
+		logger.Info("No dynamic account for stream, using static config",
+			zap.String("provider", req.Provider),
+			zap.Error(err))
+
+		// Apply circuit breaker
+		cb := h.circuitManager.Get(req.Provider)
+		if cbErr := cb.Allow(); cbErr != nil {
+			h.metrics.RecordCircuitState(req.Provider, cb.State().String())
+			return nil, cbErr
+		}
+
+		stream, err := h.staticProxy.StreamChatCompletion(ctx, req)
+		h.metrics.RecordProviderRequest(req.Provider, err == nil, time.Since(start))
+
+		if err != nil {
+			cb.RecordFailure()
+			h.metrics.RecordCircuitFailure(req.Provider)
+		} else {
+			cb.RecordSuccess()
+			h.metrics.RecordCircuitSuccess(req.Provider)
+		}
+		return stream, err
+	}
+
+	logger.Info("Using dynamic account for stream",
+		zap.String("provider", req.Provider),
+		zap.String("account_name", account.Name),
+		zap.String("account_id", account.ID.String()))
+
+	// Circuit breaker for specific account
+	accountKey := req.Provider + ":" + account.ID.String()
+	cb := h.circuitManager.Get(accountKey)
+	if cbErr := cb.Allow(); cbErr != nil {
+		return nil, cbErr
+	}
+
+	// 构建请求配置
+	accountConfig := h.buildAccountConfig(account)
+
+	// 执行流式请求
+	stream, err := h.httpClient.StreamChatCompletion(ctx, accountConfig, req)
+	h.metrics.RecordProviderRequest(req.Provider, err == nil, time.Since(start))
+
+	if err != nil {
+		cb.RecordFailure()
+		h.metrics.RecordCircuitFailure(req.Provider)
+
+		// 立即切换到备用账户
+		errMsg := err.Error()
+		newAccount, switchErr := h.accountManager.HandleAccountFailure(ctx, req.Provider, account.ID, errMsg)
+		if switchErr != nil {
+			logger.Error("Failed to switch to backup account for stream",
+				zap.String("provider", req.Provider),
+				zap.Error(switchErr))
+			return nil, err
+		}
+
+		// 使用新账户重试
+		logger.Info("Retrying stream with new account",
+			zap.String("provider", req.Provider),
+			zap.String("new_account_id", newAccount.ID.String()))
+
+		newAccountConfig := h.buildAccountConfig(newAccount)
+		retryStream, retryErr := h.httpClient.StreamChatCompletion(ctx, newAccountConfig, req)
+		if retryErr != nil {
+			h.accountManager.HandleAccountFailure(ctx, req.Provider, newAccount.ID, retryErr.Error())
+			return nil, retryErr
+		}
+
+		// 包装 StreamReader
+		return &AccountStreamReaderWrapper{
+			reader:           retryStream,
+			accountService:   h.accountService,
+			accountID:        newAccount.ID,
+			circuitBreaker:   h.circuitManager.Get(req.Provider + ":" + newAccount.ID.String()),
+			metrics:          h.metrics,
+			provider:         req.Provider,
+		}, nil
+	}
+
+	// 包装 StreamReader 用于记录状态
+	return &AccountStreamReaderWrapper{
+		reader:           stream,
+		accountService:   h.accountService,
+		accountID:        account.ID,
+		circuitBreaker:   cb,
+		metrics:          h.metrics,
+		provider:         req.Provider,
+	}, nil
+}
+
+// executeStreamWithOldAccountService 使用旧账户服务执行流式请求（兼容）
+func (h *DynamicProxyHandler) executeStreamWithOldAccountService(ctx context.Context, req *proxy.ProxyRequest, authService *auth.AuthService, key *entity.APIKey, tenant *entity.Tenant) (proxy.StreamReader, error) {
+	// 获取活跃账户
+	account, err := h.accountService.GetActiveAccount(ctx, req.Provider)
+	if err != nil {
+		// 没有动态账户配置，使用静态配置
+		logger.Info("No dynamic account for stream, using static config",
+			zap.String("provider", req.Provider),
+			zap.Error(err))
+		return h.staticProxy.StreamChatCompletion(ctx, req)
+	}
+
+	logger.Info("Using dynamic account for stream",
+		zap.String("provider", req.Provider),
+		zap.String("account_name", account.Name))
+
+	// 构建请求配置
+	accountConfig := h.buildAccountConfig(account)
+
+	// 执行流式请求
+	stream, err := h.httpClient.StreamChatCompletion(ctx, accountConfig, req)
+	if err != nil {
+		// 记录错误
+		errMsg := err.Error()
+		h.accountService.RecordError(ctx, account.ID, errMsg)
+
+		// 检查是否需要切换账户
+		if h.accountService.IsRateLimitError(errMsg) || h.accountService.IsQuotaError(errMsg) {
+			if h.accountService.IsRateLimitError(errMsg) {
+				h.accountService.HandleRateLimit(ctx, account.ID)
+			} else {
+				h.accountService.HandleInsufficientQuota(ctx, account.ID)
+			}
+			// 重试一次
+			return h.executeStreamWithDynamicAccount(ctx, req, authService, key, tenant)
+		}
+
+		return nil, err
+	}
+
+	// 包装 StreamReader 用于记录成功/失败
+	return &AccountStreamReaderWrapper{
+		reader:           stream,
+		accountService:   h.accountService,
+		accountID:        account.ID,
+	}, nil
+}
+
+// buildAccountConfig 根据账户构建配置
+func (h *DynamicProxyHandler) buildAccountConfig(account *entity.ProviderAccount) *config.ProviderConfig {
+	baseURL := account.BaseURL
+	if baseURL == "" {
+		baseURL = h.getDefaultBaseURL(account.Provider)
+	}
+
+	return &config.ProviderConfig{
+		BaseURL: baseURL,
+		APIKey:  account.APIKey,
+		Timeout: time.Duration(account.Timeout) * time.Second,
+	}
+}
+
+// getDefaultBaseURL 获取默认 Base URL
+func (h *DynamicProxyHandler) getDefaultBaseURL(provider string) string {
+	switch provider {
+	case "openai":
+		return "https://api.openai.com/v1"
+	case "claude", "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "gemini":
+		return "https://generativelanguage.googleapis.com/v1beta"
+	case "deepseek":
+		return "https://api.deepseek.com/v1"
+	case "glm":
+		return "https://open.bigmodel.cn/api/paas/v4"
+	default:
+		return ""
+	}
+}
+
+// calculateCost 计算成本（简化版本）
+func (h *DynamicProxyHandler) calculateCost(provider, model string, promptTokens, completionTokens int) decimal.Decimal {
+	// 简化的定价计算
+	promptPrice := decimal.NewFromFloat(0.01)  // $0.01 per 1K tokens
+	completionPrice := decimal.NewFromFloat(0.03) // $0.03 per 1K tokens
+
+	// 根据模型调整价格
+	if strings.Contains(model, "gpt-4") || strings.Contains(model, "opus") {
+		promptPrice = decimal.NewFromFloat(0.03)
+		completionPrice = decimal.NewFromFloat(0.06)
+	} else if strings.Contains(model, "flash") || strings.Contains(model, "mini") || strings.Contains(model, "haiku") {
+		promptPrice = decimal.NewFromFloat(0.001)
+		completionPrice = decimal.NewFromFloat(0.002)
+	}
+
+	promptCost := promptPrice.Mul(decimal.NewFromInt(int64(promptTokens))).Div(decimal.NewFromInt(1000))
+	completionCost := completionPrice.Mul(decimal.NewFromInt(int64(completionTokens))).Div(decimal.NewFromInt(1000))
+
+	return promptCost.Add(completionCost)
+}
+
+// AccountStreamReaderWrapper 包装 StreamReader 用于记录状态
+type AccountStreamReaderWrapper struct {
+	reader         proxy.StreamReader
+	accountService *service.ProviderAccountService
+	circuitBreaker *circuit.CircuitBreaker
+	metrics        *metrics.Metrics
+	provider       string
+	accountID      uuid.UUID
+	success        bool
+}
+
+func (r *AccountStreamReaderWrapper) Read(p []byte) (n int, err error) {
+	n, err = r.reader.Read(p)
+	
+	if err != nil && strings.Contains(err.Error(), "EOF") == false {
+		// 读取错误
+		r.accountService.RecordError(context.Background(), r.accountID, err.Error())
+	} else if err == nil && n > 0 {
+		r.success = true
+	}
+
+	return n, err
+}
+
+func (r *AccountStreamReaderWrapper) Close() error {
+	if r.success {
+		r.accountService.RecordSuccess(context.Background(), r.accountID, decimal.Zero)
+	}
+	return r.reader.Close()
+}

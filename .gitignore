@@ -1,0 +1,70 @@
+# Binaries
+bin/
+server
+open-station
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build artifacts
+*.tar.gz
+*.zip
+release/
+pkg_tmp/
+
+# Test files
+*.test
+*.out
+coverage.out
+coverage.html
+full_coverage.out
+*_coverage.out
+*.prof
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.env
+
+# Logs
+*.log
+server.log
+server.pid
+
+# Config (keep templates)
+configs/config.local.yaml
+configs/secrets.yaml
+
+# Database
+*.db
+*.sqlite
+
+# Temporary
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Dependencies (Go)
+vendor/
+
+# Claude Code
+.claude/
+memory/
+plans/
+
+# Coverage reports
+coverage/

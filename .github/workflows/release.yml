@@ -1,0 +1,492 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        default: 'dev'
+      draft:
+        description: 'Create as draft release'
+        type: boolean
+        default: false
+
+env:
+  GO_VERSION: '1.22'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write  # For OIDC token for provenance
+
+jobs:
+  # Prepare version info (single source of truth)
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.version.outputs.commit }}
+      buildtime: ${{ steps.version.outputs.buildtime }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v${VERSION}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+
+          # Validate version format
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid version format: $VERSION (expected: X.Y.Z or X.Y.Z-suffix)"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "commit=$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')" >> $GITHUB_OUTPUT
+          echo "buildtime=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${{ contains(VERSION, '-') }}" >> $GITHUB_OUTPUT
+
+          echo "::notice::Version: $VERSION, Tag: $TAG"
+
+  # Lint and test
+  lint-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+      - name: Run tests
+        run: |
+          go mod download
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Test plugin system
+        run: go test -v ./pkg/plugin/... ./plugins/...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.out
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Build binaries for all platforms
+  build:
+    name: Build (${{ matrix.target }})
+    needs: [prepare, lint-test]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        target:
+          - linux-amd64
+          - linux-arm64
+          - linux-armv6
+          - linux-armv7
+          - darwin-amd64
+          - darwin-arm64
+          - windows-amd64
+          - windows-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Parse target
+        id: parse
+        run: |
+          TARGET="${{ matrix.target }}"
+          OS="${TARGET%%-*}"
+          ARCH="${TARGET#*-}"
+
+          # Handle arm variants
+          if [[ "$ARCH" == armv* ]]; then
+            ARM="${ARCH#armv}"
+            ARCH="arm"
+            GOARM="$ARM"
+          else
+            ARM=""
+            GOARM=""
+          fi
+
+          echo "os=$OS" >> $GITHUB_OUTPUT
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          echo "arm=$ARM" >> $GITHUB_OUTPUT
+          echo "goarm=$GOARM" >> $GITHUB_OUTPUT
+          echo "ext=${{ matrix.target == 'windows-*' && '.exe' || '' }}" >> $GITHUB_OUTPUT
+
+      - name: Build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ steps.parse.outputs.os }}
+          GOARCH: ${{ steps.parse.outputs.arch }}
+          GOARM: ${{ steps.parse.outputs.goarm }}
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          COMMIT="${{ needs.prepare.outputs.commit }}"
+          BUILDTIME="${{ needs.prepare.outputs.buildtime }}"
+
+          LDFLAGS="-s -w \
+            -X 'internal/version.Version=${VERSION}' \
+            -X 'internal/version.Commit=${COMMIT}' \
+            -X 'internal/version.BuildTime=${BUILDTIME}' \
+            -X 'internal/version.GoVersion=$(go version | cut -d' ' -f3)'"
+
+          BINARY_NAME="open-station-${VERSION}-${{ matrix.target }}${{ steps.parse.outputs.ext }}"
+
+          go build -ldflags "$LDFLAGS" -trimpath -o "$BINARY_NAME" ./cmd/server
+
+          # Verify binary was created
+          if [ ! -f "$BINARY_NAME" ]; then
+            echo "::error::Failed to build binary: $BINARY_NAME"
+            exit 1
+          fi
+
+          # Set output for packaging
+          echo "binary_name=$BINARY_NAME" >> $GITHUB_OUTPUT
+          echo "binary_path=$BINARY_NAME" >> $GITHUB_OUTPUT
+
+        id: build
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: ${{ steps.build.outputs.binary_name }}
+          retention-days: 1
+          if-no-files-found: error
+
+  # Package all binaries
+  package:
+    name: Package
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: binaries
+          merge-multiple: true
+
+      - name: Create packages
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          mkdir -p release
+
+          # Package files to include
+          PACKAGE_FILES="README.md LICENSE configs plugins docs"
+
+          for BINARY in binaries/open-station-*; do
+            [ -f "$BINARY" ] || continue
+
+            BASENAME=$(basename "$BINARY")
+            # Remove .exe for package name
+            PACKAGE_NAME="${BASENAME%.exe}"
+            IS_WINDOWS="${{ contains(BASENAME, 'windows') }}"
+
+            mkdir -p pkg_tmp
+
+            if [ "$IS_WINDOWS" = "true" ]; then
+              # Windows: binary stays at root
+              cp "$BINARY" pkg_tmp/
+              for f in $PACKAGE_FILES; do
+                [ -e "$f" ] && cp -r "$f" pkg_tmp/ 2>/dev/null || true
+              done
+              cd pkg_tmp && zip -r "../release/${PACKAGE_NAME}.zip" . && cd ..
+            else
+              # Unix: binary in bin/
+              mkdir -p pkg_tmp/bin
+              cp "$BINARY" pkg_tmp/bin/open-station
+              chmod +x pkg_tmp/bin/open-station
+
+              for f in $PACKAGE_FILES; do
+                [ -e "$f" ] && cp -r "$f" pkg_tmp/ 2>/dev/null || true
+              done
+
+              # Install script
+              cat > pkg_tmp/install.sh << 'SCRIPT'
+#!/bin/bash
+set -e
+INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+sudo mkdir -p "$INSTALL_DIR"
+sudo cp bin/open-station "$INSTALL_DIR/open-station"
+sudo chmod +x "$INSTALL_DIR/open-station"
+echo "✅ Installed open-station to $INSTALL_DIR/open-station"
+SCRIPT
+              chmod +x pkg_tmp/install.sh
+
+              # Systemd service
+              cat > pkg_tmp/open-station.service << 'SERVICE'
+[Unit]
+Description=Open Station AI Gateway
+Documentation=https://github.com/zhaojiewen/open-station
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=simple
+User=open-station
+Group=open-station
+ExecStart=/usr/local/bin/open-station -config /etc/open-station/config.yaml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+              tar -czf "release/${PACKAGE_NAME}.tar.gz" -C pkg_tmp .
+            fi
+
+            rm -rf pkg_tmp
+          done
+
+          # Generate checksums
+          cd release
+          sha256sum * > checksums.txt
+
+          echo "::notice::Created $(ls -1 | wc -l) packages"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: release/
+          retention-days: 7
+          if-no-files-found: error
+
+  # Build Docker image (parallel with package)
+  docker:
+    name: Docker
+    needs: [prepare, lint-test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            zhaojiewen/open-station
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.prepare.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.prepare.outputs.version }}
+            type=raw,value=latest,enable={{ !contains(needs.prepare.outputs.version, '-') }}
+          labels: |
+            org.opencontainers.image.title=Open Station
+            org.opencontainers.image.description=Enterprise AI Gateway with plugin system
+            org.opencontainers.image.vendor=xuhaiqing
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ needs.prepare.outputs.commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+  # Create GitHub Release
+  release:
+    name: Release
+    needs: [prepare, package, docker]
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # For changelog generation
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: release
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "Generating changelog from $PREV_TAG to v$VERSION"
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD --no-merges | head -50)
+          else
+            CHANGELOG="- Initial release"
+          fi
+
+          # Save to file
+          echo "$CHANGELOG" > changelog.txt
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create release notes
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          IS_PRERELEASE="${{ needs.prepare.outputs.is_prerelease }}"
+
+          cat > release_notes.md << NOTES
+          ## Open Station v${VERSION}
+
+          > 企业级AI网关 - 支持多模型代理、插件化扩展、MCP服务
+
+          ${{ IS_PRERELEASE == 'true' && '⚠️ **This is a pre-release version**' || '' }}
+
+          ### 🎯 Highlights
+
+          - **插件化架构**: 支持第三方Provider插件扩展
+          - **插件市场**: 通过本地配置管理可用插件
+          - **11个MCP工具**: 通过Claude Code CLI管理插件
+          - **内置5个Provider插件**: OpenAI, Anthropic, Gemini, DeepSeek, GLM
+
+          ### 📝 Changes
+
+          ${{ steps.changelog.outputs.changelog }}
+
+          ### 📦 Downloads
+
+          | Platform | Arch | Package |
+          |----------|------|---------|
+          | Linux | AMD64 | [tar.gz](https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-linux-amd64.tar.gz) |
+          | Linux | ARM64 | [tar.gz](https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-linux-arm64.tar.gz) |
+          | Linux | ARM v6 | [tar.gz](https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-linux-armv6.tar.gz) |
+          | Linux | ARM v7 | [tar.gz](https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-linux-armv7.tar.gz) |
+          | macOS | Intel | [tar.gz](https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-darwin-amd64.tar.gz) |
+          | macOS | Apple Silicon | [tar.gz](https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-darwin-arm64.tar.gz) |
+          | Windows | AMD64 | [zip](https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-windows-amd64.zip) |
+          | Windows | ARM64 | [zip](https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-windows-arm64.zip) |
+
+          ### 🚀 Quick Install
+
+          \`\`\`bash
+          # Linux/macOS (one-line install)
+          curl -sL https://github.com/${{ github.repository }}/releases/download/v${VERSION}/open-station-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/armv7l/armv7/;s/aarch64/arm64/;s/x86_64/amd64/').tar.gz | tar xz
+          ./install.sh
+          \`\`\`
+
+          ### 🐳 Docker
+
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository }}:${VERSION}
+          docker run -d -p 8080:8080 ghcr.io/${{ github.repository }}:${VERSION}
+          \`\`\`
+
+          ### 🔌 Plugin Configuration
+
+          \`\`\`yaml
+          plugins:
+            enabled: true
+            available_plugins:
+              mistral:
+                name: "Mistral AI"
+                type: "adapter"
+                adapter_url: "http://localhost:8081"
+                capabilities: [chat, stream]
+          \`\`\`
+
+          ### ✅ Verification
+
+          \`\`\`bash
+          sha256sum -c checksums.txt
+          open-station --version
+          \`\`\`
+
+          ---
+          [📖 Documentation](https://github.com/${{ github.repository }}#readme) · [🐛 Issues](https://github.com/${{ github.repository }}/issues) · [💬 Discussions](https://github.com/${{ github.repository }}/discussions)
+          NOTES
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: Open Station v${{ needs.prepare.outputs.version }}
+          body_path: release_notes.md
+          files: release/*
+          draft: ${{ github.event.inputs.draft == 'true' }}
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+
+  # Cleanup artifacts on failure
+  cleanup:
+    name: Cleanup
+    needs: [build, package]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            binary-*
+            release-packages
+          failOnError: false

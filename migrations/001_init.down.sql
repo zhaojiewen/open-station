@@ -1,0 +1,9 @@
+-- 删除所有表
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS recharge_records;
+DROP TABLE IF EXISTS bills;
+DROP TABLE IF EXISTS usage_records;
+DROP TABLE IF EXISTS models;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS tenants;
