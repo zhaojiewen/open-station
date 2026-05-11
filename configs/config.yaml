@@ -266,3 +266,40 @@ auth:
   email_verification:
     enabled: true                  # Enable email verification (both user & tenant registration)
     token_expiry_hours: 24         # Verification token expires after 24 hours
+
+# Payment Gateway Configuration
+payment:
+  default_timeout: 30s             # Default timeout for payment API calls
+  default_currency: USD            # Default currency for payments
+  callback_base_url: ${PAYMENT_CALLBACK_URL:-http://localhost:8080/payments/callback}  # Payment callback URL base
+
+  # Alipay (支付宝)
+  alipay:
+    enabled: false                 # Enable Alipay payment
+    app_id: ${ALIPAY_APP_ID:-}     # Alipay application ID
+    private_key: ${ALIPAY_PRIVATE_KEY:-}  # Application private key (RSA2)
+    public_key: ${ALIPAY_PUBLIC_KEY:-}    # Alipay public key for signature verification
+    is_sandbox: false              # Use sandbox environment for testing
+
+  # WeChat Pay (微信支付)
+  wechat:
+    enabled: false                 # Enable WeChat Pay
+    app_id: ${WECHAT_APP_ID:-}     # WeChat App ID
+    mch_id: ${WECHAT_MCH_ID:-}     # Merchant ID
+    private_key: ${WECHAT_PRIVATE_KEY:-}  # Merchant private key
+    serial_no: ${WECHAT_SERIAL_NO:-}      # Certificate serial number
+    api_v3_key: ${WECHAT_API_V3_KEY:-}    # APIv3 key for encryption
+    is_sandbox: false              # Use sandbox environment
+
+  # Stripe (International payment)
+  stripe:
+    enabled: false                 # Enable Stripe payment
+    api_key: ${STRIPE_API_KEY:-}   # Stripe secret API key
+    publish_key: ${STRIPE_PUBLISH_KEY:-}  # Stripe publishable key (for frontend)
+
+  # PayPal (International payment)
+  paypal:
+    enabled: false                 # Enable PayPal payment
+    client_id: ${PAYPAL_CLIENT_ID:-}       # PayPal client ID
+    client_secret: ${PAYPAL_CLIENT_SECRET:-}  # PayPal client secret
+    is_sandbox: false              # Use sandbox environment

@@ -5,6 +5,7 @@ import (
 	"github.com/zhaojiewen/open-station/internal/application/service"
 	"github.com/zhaojiewen/open-station/internal/domain/repository"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/auth"
+	"github.com/zhaojiewen/open-station/internal/infrastructure/payment"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/proxy"
 	"github.com/zhaojiewen/open-station/internal/interfaces/http/handler"
 	"github.com/zhaojiewen/open-station/internal/interfaces/http/middleware"
@@ -25,18 +26,20 @@ type Router struct {
 	userAppHandler     *handler.UserApplicationHandler
 	budgetAlertHandler *handler.BudgetAlertHandler
 	// Payment system handlers
-	creditAppHandler   *handler.CreditApplicationHandler
-	memberQuotaHandler *handler.MemberQuotaHandler
+	creditAppHandler    *handler.CreditApplicationHandler
+	memberQuotaHandler  *handler.MemberQuotaHandler
+	paymentHandler      *handler.PaymentHandler
+	settlementHandler   *handler.SettlementHandler
 	// Auth handlers
-	authHandler        *handler.AuthHandler
-	authMiddleware     gin.HandlerFunc
-	adminMiddleware    gin.HandlerFunc
-	platformMiddleware gin.HandlerFunc
-	jwtAuthMiddleware  gin.HandlerFunc
+	authHandler         *handler.AuthHandler
+	authMiddleware      gin.HandlerFunc
+	adminMiddleware     gin.HandlerFunc
+	platformMiddleware  gin.HandlerFunc
+	jwtAuthMiddleware   gin.HandlerFunc
 	rateLimitMiddleware gin.HandlerFunc
-	safeMiddleware     gin.HandlerFunc
-	loggingMiddleware  gin.HandlerFunc
-	recoveryMiddleware gin.HandlerFunc
+	safeMiddleware      gin.HandlerFunc
+	loggingMiddleware   gin.HandlerFunc
+	recoveryMiddleware  gin.HandlerFunc
 	securityHeadersMiddleware gin.HandlerFunc
 }
 
@@ -54,6 +57,9 @@ func NewRouter(
 	// Payment system services
 	creditAppService *service.CreditApplicationService,
 	memberQuotaService *service.MemberQuotaService,
+	paymentService *service.PaymentService,
+	settlementService *service.SettlementService,
+	gatewayService *payment.PaymentGatewayService,
 	// Auth services for JWT authentication
 	jwtService *auth.JWTService,
 	userAuthService *auth.UserAuthService,
@@ -116,6 +122,12 @@ func NewRouter(
 	}
 	if memberQuotaService != nil {
 		r.memberQuotaHandler = handler.NewMemberQuotaHandler(memberQuotaService)
+	}
+	if paymentService != nil {
+		r.paymentHandler = handler.NewPaymentHandler(paymentService, gatewayService)
+	}
+	if settlementService != nil {
+		r.settlementHandler = handler.NewSettlementHandler(settlementService)
 	}
 
 	r.setupRoutes()
@@ -385,6 +397,61 @@ func (r *Router) setupRoutes() {
 		platformCredit.POST("/credit-applications/:id/review", r.creditAppHandler.ReviewApplication)
 		platformCredit.PUT("/tenants/:id/credit", r.creditAppHandler.AdjustCreditLimit)
 		platformCredit.GET("/member-quotas", r.memberQuotaHandler.ListAllMemberQuotas)
+	}
+
+	// Payment routes - User level (individual mode)
+	if r.paymentHandler != nil {
+		userPayments := r.engine.Group("/user/payments")
+		userPayments.Use(r.authMiddleware)
+		{
+			userPayments.POST("", r.paymentHandler.CreateOrder)
+			userPayments.GET("", r.paymentHandler.ListOrders)
+			userPayments.GET("/pending", r.paymentHandler.GetPendingOrders)
+			userPayments.GET("/:id", r.paymentHandler.GetOrder)
+			userPayments.POST("/:id/cancel", r.paymentHandler.CancelOrder)
+		}
+
+		// Payment routes - Tenant Admin level (organization mode)
+		adminPayments := r.engine.Group("/admin/payments")
+		adminPayments.Use(r.authMiddleware)
+		adminPayments.Use(r.adminMiddleware)
+		{
+			adminPayments.POST("", r.paymentHandler.CreateOrder)
+			adminPayments.GET("", r.paymentHandler.ListOrders)
+			adminPayments.GET("/:id", r.paymentHandler.GetOrder)
+		}
+
+		// Public payment endpoints (no auth)
+		r.engine.POST("/payments/callback/:provider", r.paymentHandler.ProcessCallback)
+		r.engine.GET("/payments/:order_number", r.paymentHandler.GetOrderByNumber)
+	}
+
+	// Settlement routes
+	if r.settlementHandler != nil {
+		// Tenant Admin settlement routes
+		tenantSettlement := r.engine.Group("/tenant/settlement")
+		tenantSettlement.Use(r.authMiddleware)
+		tenantSettlement.Use(r.adminMiddleware)
+		{
+			tenantSettlement.GET("/check", r.settlementHandler.CheckTrigger)
+			tenantSettlement.POST("/trigger", r.settlementHandler.TriggerSettlement)
+		}
+
+		// Settlement payment route
+		adminSettlement := r.engine.Group("/admin/settlement")
+		adminSettlement.Use(r.authMiddleware)
+		adminSettlement.Use(r.adminMiddleware)
+		{
+			adminSettlement.POST("/:bill_id/pay", r.settlementHandler.ProcessBillPayment)
+		}
+
+		// Platform settlement management
+		platformSettlement := r.engine.Group("/platform/settlement")
+		platformSettlement.Use(r.platformMiddleware)
+		{
+			platformSettlement.GET("/overdue", r.settlementHandler.CheckOverdue)
+			platformSettlement.POST("/run", r.settlementHandler.RunScheduledSettlement)
+		}
 	}
 }
 

@@ -161,6 +161,21 @@ var (
 	ErrDecryptionFailed      = NewAppError("CRYPTO_002", "decryption failed", nil)
 	ErrInvalidKey            = NewAppError("CRYPTO_003", "invalid encryption key", nil)
 	ErrKeyNotFound           = NewAppError("CRYPTO_004", "encryption key not found", nil)
+
+	// ===== 支付错误 (PAY) =====
+	ErrPaymentProviderDisabled  = NewAppError("PAY_001", "payment provider disabled", nil)
+	ErrPaymentCreateFailed      = NewAppError("PAY_002", "failed to create payment order", nil)
+	ErrPaymentVerifyFailed      = NewAppError("PAY_003", "failed to verify payment callback", nil)
+	ErrPaymentQueryFailed       = NewAppError("PAY_004", "failed to query payment status", nil)
+	ErrPaymentSignFailed        = NewAppError("PAY_005", "failed to sign payment request", nil)
+	ErrPaymentInvalidSignature  = NewAppError("PAY_006", "invalid payment callback signature", nil)
+	ErrPaymentTimeout           = NewAppError("PAY_007", "payment request timeout", nil)
+	ErrPaymentNotFound          = NewAppError("PAY_008", "payment order not found", nil)
+	ErrPaymentAlreadyPaid       = NewAppError("PAY_009", "payment order already paid", nil)
+	ErrPaymentExpired           = NewAppError("PAY_010", "payment order expired", nil)
+	ErrPaymentCancelled         = NewAppError("PAY_011", "payment order cancelled", nil)
+	ErrPaymentAmountMismatch    = NewAppError("PAY_012", "payment amount mismatch", nil)
+	ErrPaymentUnsupportedMethod = NewAppError("PAY_013", "unsupported payment method", nil)
 )
 
 // IsAuthError checks if the error is an authentication related error
@@ -276,6 +291,15 @@ func IsVerifyError(err error) bool {
 	var appErr *AppError
 	if As(err, &appErr) {
 		return appErr.Code[:6] == "VERIFY"
+	}
+	return false
+}
+
+// IsPaymentError checks if the error is a payment related error
+func IsPaymentError(err error) bool {
+	var appErr *AppError
+	if As(err, &appErr) {
+		return appErr.Code[:3] == "PAY"
 	}
 	return false
 }

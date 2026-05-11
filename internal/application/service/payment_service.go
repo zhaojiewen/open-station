@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/zhaojiewen/open-station/internal/domain/entity"
 	"github.com/zhaojiewen/open-station/internal/domain/repository"
+	"github.com/zhaojiewen/open-station/internal/infrastructure/payment"
 )
 
 // PaymentService handles payment order management
@@ -17,6 +18,7 @@ type PaymentService struct {
 	userQuotaRepo    repository.UserQuotaRepository
 	tenantRepo       repository.TenantRepository
 	notificationSvc  *NotificationService
+	gatewaySvc       *payment.PaymentGatewayService
 }
 
 // NewPaymentService creates a new payment service
@@ -25,19 +27,32 @@ func NewPaymentService(
 	userQuotaRepo repository.UserQuotaRepository,
 	tenantRepo repository.TenantRepository,
 	notificationSvc *NotificationService,
+	gatewaySvc *payment.PaymentGatewayService,
 ) *PaymentService {
 	return &PaymentService{
 		paymentOrderRepo: paymentOrderRepo,
 		userQuotaRepo:    userQuotaRepo,
 		tenantRepo:       tenantRepo,
 		notificationSvc:  notificationSvc,
+		gatewaySvc:       gatewaySvc,
 	}
 }
 
-// CreatePaymentOrder creates a new payment order
-func (s *PaymentService) CreatePaymentOrder(ctx context.Context, req *PaymentOrderRequest) (*entity.PaymentOrder, error) {
+// PaymentOrderResult represents the result of creating a payment order
+type PaymentOrderResult struct {
+	Order      *entity.PaymentOrder
+	Credential *payment.PaymentCredential
+}
+
+// CreatePaymentOrder creates a new payment order and gets payment credentials from gateway
+func (s *PaymentService) CreatePaymentOrder(ctx context.Context, req *PaymentOrderRequest) (*PaymentOrderResult, error) {
 	// Generate order number
 	orderNumber := generateOrderNumber()
+
+	// Set default currency
+	if req.Currency == "" {
+		req.Currency = "USD"
+	}
 
 	order := &entity.PaymentOrder{
 		PaymentMode:     req.PaymentMode,
@@ -65,7 +80,38 @@ func (s *PaymentService) CreatePaymentOrder(ctx context.Context, req *PaymentOrd
 		return nil, fmt.Errorf("failed to create payment order: %w", err)
 	}
 
-	return order, nil
+	// Call payment gateway to get payment credentials
+	var credential *payment.PaymentCredential
+	if s.gatewaySvc != nil && s.gatewaySvc.IsProviderEnabled(req.PaymentProvider) {
+		gatewayReq := &payment.CreatePaymentRequest{
+			OrderNumber: orderNumber,
+			Amount:      req.Amount,
+			Currency:    req.Currency,
+			Method:      req.PaymentMethod,
+			Subject:     fmt.Sprintf("%s - %s", req.OrderType, req.PaymentMode),
+			ReturnURL:   req.ReturnURL,
+			NotifyURL:   s.gatewaySvc.GetCallbackURL() + "/" + req.PaymentProvider,
+			ClientIP:    req.ClientIP,
+		}
+
+		cred, err := s.gatewaySvc.CreatePayment(ctx, req.PaymentProvider, gatewayReq)
+		if err != nil {
+			// Gateway failed, but order is created - user can still manually pay
+			// Log the error but don't fail the request
+		} else {
+			credential = cred
+			// Update order with external payment ID
+			if cred.PaymentID != "" {
+				order.PaymentID = cred.PaymentID
+				s.paymentOrderRepo.Update(ctx, order)
+			}
+		}
+	}
+
+	return &PaymentOrderResult{
+		Order:      order,
+		Credential: credential,
+	}, nil
 }
 
 // PaymentOrderRequest represents the payment order creation request
@@ -79,6 +125,8 @@ type PaymentOrderRequest struct {
 	Currency        string
 	PaymentProvider string          // alipay, wechat, stripe, paypal, bank
 	PaymentMethod   string          // qr_code, web, app, bank_transfer
+	ReturnURL       string          // frontend redirect URL after payment
+	ClientIP        string          // client IP for risk control
 }
 
 // generateOrderNumber generates a unique order number

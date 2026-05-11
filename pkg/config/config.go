@@ -21,6 +21,7 @@ type Config struct {
 	Plugins      PluginsConfig      `mapstructure:"plugins"`
 	Notification NotificationConfig `mapstructure:"notification"`
 	Auth         AuthConfig         `mapstructure:"auth"`
+	Payment      PaymentConfig      `mapstructure:"payment"`
 }
 
 type ServerConfig struct {
@@ -388,4 +389,52 @@ type EmailEncryptionConfig struct {
 type EmailVerificationConfig struct {
 	Enabled            bool `mapstructure:"enabled"`              // 是否启用邮箱验证（默认true）
 	TokenExpiryHours   int  `mapstructure:"token_expiry_hours"`   // 验证token过期时间（小时，默认24）
+}
+
+// ==================== Payment配置 ====================
+
+// PaymentConfig 支付网关配置
+type PaymentConfig struct {
+	DefaultTimeout  time.Duration    `mapstructure:"default_timeout"`   // 默认超时时间
+	DefaultCurrency string           `mapstructure:"default_currency"`  // 默认货币
+	CallbackBaseURL string           `mapstructure:"callback_base_url"` // 回调URL基础路径
+	Alipay          AlipayConfig     `mapstructure:"alipay"`
+	Wechat          WechatConfig     `mapstructure:"wechat"`
+	Stripe          StripeConfig     `mapstructure:"stripe"`
+	PayPal          PayPalConfig     `mapstructure:"paypal"`
+}
+
+// AlipayConfig 支付宝配置
+type AlipayConfig struct {
+	Enabled    bool   `mapstructure:"enabled"`     // 是否启用
+	AppID      string `mapstructure:"app_id"`      // 应用ID
+	PrivateKey string `mapstructure:"private_key"` // 应用私钥
+	PublicKey  string `mapstructure:"public_key"`  // 支付宝公钥
+	IsSandbox  bool   `mapstructure:"is_sandbox"`  // 是否沙箱环境
+}
+
+// WechatConfig 微信支付配置
+type WechatConfig struct {
+	Enabled     bool   `mapstructure:"enabled"`       // 是否启用
+	AppID       string `mapstructure:"app_id"`        // 应用ID
+	MchID       string `mapstructure:"mch_id"`        // 商户ID
+	PrivateKey  string `mapstructure:"private_key"`   // 商户私钥
+	SerialNo    string `mapstructure:"serial_no"`     // 证书序列号
+	APIV3Key    string `mapstructure:"api_v3_key"`    // APIv3密钥
+	IsSandbox   bool   `mapstructure:"is_sandbox"`    // 是否沙箱环境
+}
+
+// StripeConfig Stripe配置
+type StripeConfig struct {
+	Enabled     bool   `mapstructure:"enabled"`      // 是否启用
+	APIKey      string `mapstructure:"api_key"`      // API密钥
+	PublishKey  string `mapstructure:"publish_key"`  // 公开密钥（前端使用）
+}
+
+// PayPalConfig PayPal配置
+type PayPalConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`        // 是否启用
+	ClientID      string `mapstructure:"client_id"`      // 客户端ID
+	ClientSecret  string `mapstructure:"client_secret"`  // 客户端密钥
+	IsSandbox     bool   `mapstructure:"is_sandbox"`     // 是否沙箱环境
 }
