@@ -96,6 +96,42 @@ func (m *MockTenantRepository) DeductBalance(ctx context.Context, id uuid.UUID, 
 	return nil
 }
 
+func (m *MockTenantRepository) ListByCreditStatus(ctx context.Context, creditStatus string, page, pageSize int) ([]entity.Tenant, int64, error) {
+	var result []entity.Tenant
+	for _, t := range m.tenants {
+		if t.CreditStatus == creditStatus {
+			result = append(result, *t)
+		}
+	}
+	return result, int64(len(result)), nil
+}
+
+func (m *MockTenantRepository) IncrementBudgetUsed(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	if bal, ok := m.balance[id]; ok {
+		m.balance[id] = bal.Add(amount)
+	}
+	return nil
+}
+
+func (m *MockTenantRepository) ResetBudgetUsed(ctx context.Context, id uuid.UUID) error {
+	return nil
+}
+
+func (m *MockTenantRepository) GetBudgetUsage(ctx context.Context, id uuid.UUID) (decimal.Decimal, int64, error) {
+	if bal, ok := m.balance[id]; ok {
+		return bal, 0, nil
+	}
+	return decimal.Zero, 0, nil
+}
+
+func (m *MockTenantRepository) IncrementTokensUsed(ctx context.Context, id uuid.UUID, tokens int64) error {
+	return nil
+}
+
+func (m *MockTenantRepository) ResetTokensUsed(ctx context.Context, id uuid.UUID) error {
+	return nil
+}
+
 type MockUsageRepository struct {
 	records []entity.UsageRecord
 }
@@ -239,6 +275,47 @@ func (m *MockBillRepository) MarkPaid(ctx context.Context, id uuid.UUID) error {
 			m.bills[i].Status = "paid"
 			now := time.Now()
 			m.bills[i].PaidAt = &now
+			return nil
+		}
+	}
+	return errors.New("bill not found")
+}
+
+func (m *MockBillRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	for i, b := range m.bills {
+		if b.ID == id {
+			m.bills = append(m.bills[:i], m.bills[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("bill not found")
+}
+
+func (m *MockBillRepository) ListByStatus(ctx context.Context, status string, page, pageSize int) ([]entity.Bill, int64, error) {
+	var result []entity.Bill
+	for _, b := range m.bills {
+		if b.Status == status {
+			result = append(result, b)
+		}
+	}
+	return result, int64(len(result)), nil
+}
+
+func (m *MockBillRepository) ListByType(ctx context.Context, billType string, page, pageSize int) ([]entity.Bill, int64, error) {
+	var result []entity.Bill
+	for _, b := range m.bills {
+		if b.Type == billType {
+			result = append(result, b)
+		}
+	}
+	return result, int64(len(result)), nil
+}
+
+func (m *MockBillRepository) MarkPartialPaid(ctx context.Context, id uuid.UUID, remainingAmount decimal.Decimal) error {
+	for i, b := range m.bills {
+		if b.ID == id {
+			m.bills[i].Status = "partial_paid"
+			m.bills[i].TotalCost = remainingAmount
 			return nil
 		}
 	}
@@ -839,4 +916,332 @@ func TestErrorVariables(t *testing.T) {
 	if apperrors.ErrInvalidAmount.Error() != "BILL_002: invalid amount" {
 		t.Errorf("apperrors.ErrInvalidAmount message incorrect")
 	}
+}
+
+func TestBillingService_RecordUsage_Success(t *testing.T) {
+	tenantRepo := NewMockTenantRepo()
+	usageRepo := NewMockUsageRepo()
+	billRepo := NewMockBillRepo()
+	rechargeRepo := NewMockRechargeRepo()
+	modelRepo := NewMockModelRepo()
+
+	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
+	tenantRepo.Create(context.Background(), tenant)
+	tenantRepo.UpdateBalance(context.Background(), tenant.ID, decimal.NewFromFloat(100))
+
+	model := &entity.Model{
+		Provider:        "openai",
+		ModelID:         "gpt-4",
+		PromptPrice:     decimal.NewFromFloat(0.03),
+		CompletionPrice: decimal.NewFromFloat(0.06),
+	}
+	modelRepo.Create(context.Background(), model)
+
+	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+
+	userID := uuid.New()
+	apiKeyID := uuid.New()
+	record, err := service.RecordUsage(
+		context.Background(),
+		tenant.ID,
+		userID,
+		apiKeyID,
+		"req-success",
+		"openai",
+		"gpt-4",
+		1000, 500,
+		100, 200,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if record == nil {
+		t.Fatal("record should not be nil")
+	}
+	if record.RequestID != "req-success" {
+		t.Errorf("request ID = %v, want req-success", record.RequestID)
+	}
+	if record.TotalTokens != 1500 {
+		t.Errorf("total tokens = %d, want 1500", record.TotalTokens)
+	}
+	if record.TenantID != tenant.ID {
+		t.Errorf("tenant ID = %v, want %v", record.TenantID, tenant.ID)
+	}
+
+	// Balance should have been deducted
+	balance, _ := tenantRepo.GetBalance(context.Background(), tenant.ID)
+	expectedCost := decimal.NewFromFloat(0.03).Mul(decimal.NewFromInt(1000)).Div(decimal.NewFromInt(1000)).
+		Add(decimal.NewFromFloat(0.06).Mul(decimal.NewFromInt(500)).Div(decimal.NewFromInt(1000)))
+	expectedBalance := decimal.NewFromFloat(100).Sub(expectedCost)
+	if !balance.Equals(expectedBalance) {
+		t.Errorf("balance = %v, want %v", balance, expectedBalance)
+	}
+}
+
+func TestBillingService_RecordUsage_Rollback(t *testing.T) {
+	tenantRepo := NewMockTenantRepo()
+	billRepo := NewMockBillRepo()
+	rechargeRepo := NewMockRechargeRepo()
+	modelRepo := NewMockModelRepo()
+
+	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
+	tenantRepo.Create(context.Background(), tenant)
+	initialBalance := decimal.NewFromFloat(100)
+	tenantRepo.UpdateBalance(context.Background(), tenant.ID, initialBalance)
+
+	model := &entity.Model{
+		Provider:        "openai",
+		ModelID:         "gpt-4",
+		PromptPrice:     decimal.NewFromFloat(0.03),
+		CompletionPrice: decimal.NewFromFloat(0.06),
+	}
+	modelRepo.Create(context.Background(), model)
+
+	// Create a failing usage repo
+	usageRepo := &MockUsageRepositoryFailing{}
+
+	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+
+	userID := uuid.New()
+	apiKeyID := uuid.New()
+	_, err := service.RecordUsage(
+		context.Background(),
+		tenant.ID,
+		userID,
+		apiKeyID,
+		"req-rollback",
+		"openai",
+		"gpt-4",
+		1000, 500,
+		100, 200,
+	)
+
+	if err == nil {
+		t.Fatal("expected error from failing usage repo")
+	}
+
+	// Balance should have been rolled back
+	balance, _ := tenantRepo.GetBalance(context.Background(), tenant.ID)
+	if !balance.Equals(initialBalance) {
+		t.Errorf("balance should have been rolled back to %v, got %v", initialBalance, balance)
+	}
+}
+
+type MockUsageRepositoryFailing struct{}
+
+func (m *MockUsageRepositoryFailing) Create(ctx context.Context, record *entity.UsageRecord) error {
+	return errors.New("database connection failed")
+}
+func (m *MockUsageRepositoryFailing) CreateBatch(ctx context.Context, records []*entity.UsageRecord) error {
+	return errors.New("database connection failed")
+}
+func (m *MockUsageRepositoryFailing) GetByID(ctx context.Context, id uuid.UUID) (*entity.UsageRecord, error) {
+	return nil, errors.New("not found")
+}
+func (m *MockUsageRepositoryFailing) GetByRequestID(ctx context.Context, requestID string) (*entity.UsageRecord, error) {
+	return nil, errors.New("not found")
+}
+func (m *MockUsageRepositoryFailing) List(ctx context.Context, tenantID uuid.UUID, start, end time.Time, page, pageSize int) ([]entity.UsageRecord, int64, error) {
+	return nil, 0, nil
+}
+func (m *MockUsageRepositoryFailing) ListByUser(ctx context.Context, userID uuid.UUID, start, end time.Time, page, pageSize int) ([]entity.UsageRecord, int64, error) {
+	return nil, 0, nil
+}
+func (m *MockUsageRepositoryFailing) GetTotalCost(ctx context.Context, tenantID uuid.UUID, start, end time.Time) (decimal.Decimal, int64, error) {
+	return decimal.Zero, 0, nil
+}
+
+func TestBillingService_RecordUsage_ModelNotFound(t *testing.T) {
+	tenantRepo := NewMockTenantRepo()
+	usageRepo := NewMockUsageRepo()
+	billRepo := NewMockBillRepo()
+	rechargeRepo := NewMockRechargeRepo()
+	modelRepo := NewMockModelRepo()
+
+	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
+	tenantRepo.Create(context.Background(), tenant)
+	tenantRepo.UpdateBalance(context.Background(), tenant.ID, decimal.NewFromFloat(100))
+
+	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+
+	_, err := service.RecordUsage(
+		context.Background(),
+		tenant.ID,
+		uuid.New(),
+		uuid.New(),
+		"req-unknown-model",
+		"unknown",
+		"unknown-model",
+		100, 50,
+		100, 200,
+	)
+
+	if err == nil {
+		t.Fatal("expected error for unknown model")
+	}
+}
+
+func TestBillingService_GetTotalCost(t *testing.T) {
+	tenantRepo := NewMockTenantRepo()
+	usageRepo := NewMockUsageRepo()
+	billRepo := NewMockBillRepo()
+	rechargeRepo := NewMockRechargeRepo()
+	modelRepo := NewMockModelRepo()
+
+	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
+	tenantRepo.Create(context.Background(), tenant)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		record := &entity.UsageRecord{
+			TenantID:  tenant.ID,
+			UserID:    uuid.New(),
+			RequestID: "req-" + uuid.New().String(),
+			Provider:  "openai",
+			ModelID:   "gpt-4",
+			Cost:      decimal.NewFromFloat(float64(10 + i)),
+			CreatedAt: now,
+		}
+		usageRepo.Create(context.Background(), record)
+	}
+
+	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+
+	start := now.Add(-1 * time.Hour)
+	end := now.Add(1 * time.Hour)
+
+	totalCost, totalTokens, err := service.GetTotalCost(context.Background(), tenant.ID, start, end)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedTotal := decimal.NewFromFloat(10).Add(decimal.NewFromFloat(11)).Add(decimal.NewFromFloat(12))
+	if !totalCost.Equals(expectedTotal) {
+		t.Errorf("total cost = %v, want %v", totalCost, expectedTotal)
+	}
+	if totalTokens != 0 {
+		t.Errorf("total tokens = %d, want 0", totalTokens)
+	}
+}
+
+func TestBillingService_GenerateBill_Dedup(t *testing.T) {
+	tenantRepo := NewMockTenantRepo()
+	usageRepo := NewMockUsageRepo()
+	billRepo := NewMockBillRepo()
+	rechargeRepo := NewMockRechargeRepo()
+	modelRepo := NewMockModelRepo()
+
+	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
+	tenantRepo.Create(context.Background(), tenant)
+
+	now := time.Now()
+	record := &entity.UsageRecord{
+		TenantID:  tenant.ID,
+		UserID:    uuid.New(),
+		RequestID: "req-" + uuid.New().String(),
+		Provider:  "openai",
+		ModelID:   "gpt-4",
+		Cost:      decimal.NewFromFloat(10),
+		CreatedAt: now,
+	}
+	usageRepo.Create(context.Background(), record)
+
+	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+
+	start := now.Add(-1 * time.Hour)
+	end := now.Add(1 * time.Hour)
+
+	// First generate
+	bill1, err := service.GenerateBill(context.Background(), tenant.ID, start, end)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Second generate with same period should return existing bill (dedup)
+	bill2, err := service.GenerateBill(context.Background(), tenant.ID, start, end)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if bill1.ID != bill2.ID {
+		t.Errorf("dedup failed: bill1.ID=%v, bill2.ID=%v", bill1.ID, bill2.ID)
+	}
+}
+
+func TestBillingService_CalculateCost_EdgeCases(t *testing.T) {
+	tenantRepo := NewMockTenantRepo()
+	usageRepo := NewMockUsageRepo()
+	billRepo := NewMockBillRepo()
+	rechargeRepo := NewMockRechargeRepo()
+	modelRepo := NewMockModelRepo()
+
+	model := &entity.Model{
+		Provider:        "openai",
+		ModelID:         "gpt-4",
+		PromptPrice:     decimal.NewFromFloat(0.03),
+		CompletionPrice: decimal.NewFromFloat(0.06),
+	}
+	modelRepo.Create(context.Background(), model)
+
+	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+
+	// Test with only prompt tokens
+	cost, err := service.CalculateCost(context.Background(), "openai", "gpt-4", 2000, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expectedPrompt := decimal.NewFromFloat(0.03).Mul(decimal.NewFromInt(2000)).Div(decimal.NewFromInt(1000))
+	if !cost.Equals(expectedPrompt) {
+		t.Errorf("cost = %v, want %v", cost, expectedPrompt)
+	}
+
+	// Test with only completion tokens
+	cost, err = service.CalculateCost(context.Background(), "openai", "gpt-4", 0, 1000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expectedCompletion := decimal.NewFromFloat(0.06).Mul(decimal.NewFromInt(1000)).Div(decimal.NewFromInt(1000))
+	if !cost.Equals(expectedCompletion) {
+		t.Errorf("cost = %v, want %v", cost, expectedCompletion)
+	}
+
+	// Test with large token counts
+	cost, err = service.CalculateCost(context.Background(), "openai", "gpt-4", 1000000, 500000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cost.IsZero() {
+		t.Error("cost should not be zero for large token counts")
+	}
+}
+
+func TestBillingService_Recharge_UpdateBalanceFailure(t *testing.T) {
+	tenantRepo := NewMockTenantRepo()
+	usageRepo := NewMockUsageRepo()
+	billRepo := NewMockBillRepo()
+	modelRepo := NewMockModelRepo()
+
+	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
+	tenantRepo.Create(context.Background(), tenant)
+
+	// Use a recharge repo that succeeds creation but fails MarkCompleted
+	rechargeRepo := &MockRechargeRepositoryFailing{
+		MockRechargeRepository: *NewMockRechargeRepo(),
+	}
+
+	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	_, err := service.Recharge(context.Background(), tenant.ID, decimal.NewFromInt(50), "card", "pay-1", "notes")
+
+	if err == nil {
+		t.Fatal("expected error from failing recharge repo")
+	}
+}
+
+type MockRechargeRepositoryFailing struct {
+	MockRechargeRepository
+}
+
+func (m *MockRechargeRepositoryFailing) MarkCompleted(ctx context.Context, id uuid.UUID) error {
+	return errors.New("mark completed failed")
 }
