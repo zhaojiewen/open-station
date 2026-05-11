@@ -147,5 +147,20 @@ func (s *MCPService) getManagerTools() []mcp.Tool {
 		tools = append(tools, getPluginManagerTools()...)
 	}
 
+	// Add budget alert tools if budget alert service is available
+	if s.budgetAlertService != nil {
+		tools = append(tools, getBudgetAlertTools()...)
+	}
+
+	// Add user application tools if user app service is available
+	if s.userAppService != nil {
+		tools = append(tools, getUserApplicationTools()...)
+	}
+
+	// Add tenant application tools if tenant app service is available (platform admin)
+	if s.tenantAppService != nil {
+		tools = append(tools, getTenantApplicationTools()...)
+	}
+
 	return tools
 }

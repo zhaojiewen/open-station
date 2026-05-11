@@ -21,6 +21,10 @@ type MCPService struct {
 	providerAccountService *ProviderAccountService
 	pluginService          *PluginService
 	pluginMCPHandlers      *PluginMCPHandlers
+	costLimitService       *CostLimitService
+	userAppService         *UserApplicationService
+	tenantAppService       *TenantApplicationService
+	budgetAlertService     *BudgetAlertService
 	sessions               map[string]*MCPSession
 	sessionMutex           sync.RWMutex
 	sessionTimeout         time.Duration
@@ -42,12 +46,25 @@ type MCPSession struct {
 type ClientCapabilities struct{}
 
 // NewMCPService creates a new MCP service
-func NewMCPService(authService *auth.AuthService, billingService *BillingService, providerAccountService *ProviderAccountService, pluginService *PluginService) *MCPService {
+func NewMCPService(
+	authService *auth.AuthService,
+	billingService *BillingService,
+	providerAccountService *ProviderAccountService,
+	pluginService *PluginService,
+	costLimitService *CostLimitService,
+	userAppService *UserApplicationService,
+	tenantAppService *TenantApplicationService,
+	budgetAlertService *BudgetAlertService,
+) *MCPService {
 	s := &MCPService{
 		authService:            authService,
 		billingService:         billingService,
 		providerAccountService: providerAccountService,
 		pluginService:          pluginService,
+		costLimitService:       costLimitService,
+		userAppService:         userAppService,
+		tenantAppService:       tenantAppService,
+		budgetAlertService:     budgetAlertService,
 		sessions:               make(map[string]*MCPSession),
 		sessionTimeout:         30 * time.Minute,
 	}
@@ -205,6 +222,56 @@ func (s *MCPService) executeTool(ctx context.Context, session *MCPSession, toolN
 		return s.toolDeleteProviderAccount(ctx, args)
 	case "get_provider_status":
 		return s.toolGetProviderStatus(ctx, args)
+	// Budget and cost limit tools
+	case "set_user_budget":
+			return s.toolSetUserBudget(ctx, args)
+		case "get_user_budget_usage":
+			return s.toolGetUserBudgetUsage(ctx, args)
+		case "set_api_key_cost_limit":
+			return s.toolSetAPIKeyCostLimit(ctx, args)
+		case "get_api_key_cost_usage":
+			return s.toolGetAPIKeyCostUsage(ctx, args)
+		case "set_tenant_budget":
+			return s.toolSetTenantBudget(ctx, args)
+		case "get_cost_summary":
+			return s.toolGetCostSummary(ctx, args)
+		// Budget alert tools
+		case "create_budget_alert":
+			return s.toolCreateBudgetAlert(ctx, args)
+		case "list_budget_alerts":
+			return s.toolListBudgetAlerts(ctx, args)
+		case "update_budget_alert":
+			return s.toolUpdateBudgetAlert(ctx, args)
+		case "delete_budget_alert":
+			return s.toolDeleteBudgetAlert(ctx, args)
+		case "enable_budget_alert":
+			return s.toolEnableBudgetAlert(ctx, args)
+		case "disable_budget_alert":
+			return s.toolDisableBudgetAlert(ctx, args)
+		// User application tools
+		case "send_user_invitation":
+			return s.toolSendUserInvitation(ctx, args)
+		case "list_user_applications":
+			return s.toolListUserApplications(ctx, args)
+		case "approve_user_application":
+			return s.toolApproveUserApplication(ctx, args)
+		case "reject_user_application":
+			return s.toolRejectUserApplication(ctx, args)
+		case "cancel_user_invitation":
+			return s.toolCancelUserInvitation(ctx, args)
+		case "create_user_direct":
+			return s.toolCreateUserDirect(ctx, args)
+		// Tenant application tools (platform admin)
+		case "list_tenant_applications":
+			return s.toolListTenantApplications(ctx, args)
+		case "approve_tenant_application":
+			return s.toolApproveTenantApplication(ctx, args)
+		case "reject_tenant_application":
+			return s.toolRejectTenantApplication(ctx, args)
+		case "suspend_tenant":
+			return s.toolSuspendTenant(ctx, args)
+		case "activate_tenant":
+			return s.toolActivateTenant(ctx, args)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
 	}

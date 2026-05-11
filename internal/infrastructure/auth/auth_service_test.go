@@ -25,6 +25,45 @@ func init() {
 
 // Mock implementations for testing
 
+// MockAPIKeyRepositoryWithRelations extends MockAPIKeyRepository to support GetWithRelations
+type MockAPIKeyRepositoryWithRelations struct {
+	*MockAPIKeyRepository
+	users   map[uuid.UUID]*entity.User
+	tenants map[uuid.UUID]*entity.Tenant
+}
+
+func NewMockAPIKeyRepositoryWithRelations() *MockAPIKeyRepositoryWithRelations {
+	return &MockAPIKeyRepositoryWithRelations{
+		MockAPIKeyRepository: NewMockAPIKeyRepository(),
+		users:                make(map[uuid.UUID]*entity.User),
+		tenants:              make(map[uuid.UUID]*entity.Tenant),
+	}
+}
+
+func (m *MockAPIKeyRepositoryWithRelations) GetWithRelations(ctx context.Context, keyHash string) (*entity.APIKey, *entity.User, *entity.Tenant, error) {
+	key, ok := m.hashKeys[keyHash]
+	if !ok {
+		return nil, nil, nil, errors.New("not found")
+	}
+	user, ok := m.users[key.UserID]
+	if !ok {
+		return key, nil, nil, nil
+	}
+	tenant, ok := m.tenants[key.TenantID]
+	if !ok {
+		return key, user, nil, nil
+	}
+	return key, user, tenant, nil
+}
+
+func (m *MockAPIKeyRepositoryWithRelations) SetUser(user *entity.User) {
+	m.users[user.ID] = user
+}
+
+func (m *MockAPIKeyRepositoryWithRelations) SetTenant(tenant *entity.Tenant) {
+	m.tenants[tenant.ID] = tenant
+}
+
 type MockAPIKeyRepository struct {
 	keys     map[uuid.UUID]*entity.APIKey
 	hashKeys map[string]*entity.APIKey
@@ -145,6 +184,53 @@ func (m *MockAPIKeyRepository) GetWithRelations(ctx context.Context, keyHash str
 	return key, nil, nil, nil
 }
 
+func (m *MockAPIKeyRepository) IncrementMonthlyCostUsed(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	if key, ok := m.keys[id]; ok {
+		key.MonthlyCostUsed = key.MonthlyCostUsed.Add(amount)
+		return nil
+	}
+	return errors.New("not found")
+}
+
+func (m *MockAPIKeyRepository) IncrementDailyCostUsed(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	if key, ok := m.keys[id]; ok {
+		key.DailyCostUsed = key.DailyCostUsed.Add(amount)
+		return nil
+	}
+	return errors.New("not found")
+}
+
+func (m *MockAPIKeyRepository) ResetMonthlyCostUsed(ctx context.Context, id uuid.UUID) error {
+	if key, ok := m.keys[id]; ok {
+		key.MonthlyCostUsed = decimal.Zero
+		return nil
+	}
+	return errors.New("not found")
+}
+
+func (m *MockAPIKeyRepository) ResetDailyCostUsed(ctx context.Context, id uuid.UUID) error {
+	if key, ok := m.keys[id]; ok {
+		key.DailyCostUsed = decimal.Zero
+		return nil
+	}
+	return errors.New("not found")
+}
+
+func (m *MockAPIKeyRepository) GetCostUsage(ctx context.Context, id uuid.UUID) (monthlyUsed decimal.Decimal, dailyUsed decimal.Decimal, tokensMonth int64, tokensToday int64, err error) {
+	if key, ok := m.keys[id]; ok {
+		return key.MonthlyCostUsed, key.DailyCostUsed, key.UsedTokensThisMonth, 0, nil
+	}
+	return decimal.Zero, decimal.Zero, 0, 0, errors.New("not found")
+}
+
+func (m *MockAPIKeyRepository) IncrementDailyTokens(ctx context.Context, id uuid.UUID, tokens int64) error {
+	return nil
+}
+
+func (m *MockAPIKeyRepository) ResetDailyTokens(ctx context.Context, id uuid.UUID) error {
+	return nil
+}
+
 type MockUserRepository struct {
 	users   map[uuid.UUID]*entity.User
 	byEmail map[string]*entity.User
@@ -174,6 +260,15 @@ func (m *MockUserRepository) GetByID(ctx context.Context, id uuid.UUID) (*entity
 func (m *MockUserRepository) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
 	if user, ok := m.byEmail[email]; ok {
 		return user, nil
+	}
+	return nil, errors.New("not found")
+}
+
+func (m *MockUserRepository) GetByVerificationToken(ctx context.Context, token string) (*entity.User, error) {
+	for _, user := range m.users {
+		if user.EmailVerificationToken == token {
+			return user, nil
+		}
 	}
 	return nil, errors.New("not found")
 }
@@ -210,6 +305,17 @@ func (m *MockUserRepository) UpdateLastLogin(ctx context.Context, id uuid.UUID) 
 	}
 	return errors.New("not found")
 }
+
+func (m *MockUserRepository) IncrementMonthlyBudgetUsed(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error { return nil }
+func (m *MockUserRepository) IncrementDailyBudgetUsed(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error { return nil }
+func (m *MockUserRepository) ResetMonthlyBudgetUsed(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockUserRepository) ResetDailyBudgetUsed(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockUserRepository) GetBudgetUsage(ctx context.Context, id uuid.UUID) (monthlyUsed decimal.Decimal, dailyUsed decimal.Decimal, tokensUsed int64, err error) {
+	return decimal.Zero, decimal.Zero, 0, nil
+}
+func (m *MockUserRepository) IncrementTokensUsed(ctx context.Context, id uuid.UUID, tokens int64) error { return nil }
+func (m *MockUserRepository) IncrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockUserRepository) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
 
 type MockTenantRepository struct {
 	tenants map[uuid.UUID]*entity.Tenant
@@ -277,6 +383,17 @@ func (m *MockTenantRepository) GetBalance(ctx context.Context, id uuid.UUID) (de
 func (m *MockTenantRepository) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
 	return nil
 }
+
+func (m *MockTenantRepository) ListByCreditStatus(ctx context.Context, creditStatus string, page, pageSize int) ([]entity.Tenant, int64, error) {
+	return nil, 0, nil
+}
+func (m *MockTenantRepository) IncrementBudgetUsed(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error { return nil }
+func (m *MockTenantRepository) ResetBudgetUsed(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockTenantRepository) GetBudgetUsage(ctx context.Context, id uuid.UUID) (monthlyUsed decimal.Decimal, tokensUsed int64, err error) {
+	return decimal.Zero, 0, nil
+}
+func (m *MockTenantRepository) IncrementTokensUsed(ctx context.Context, id uuid.UUID, tokens int64) error { return nil }
+func (m *MockTenantRepository) ResetTokensUsed(ctx context.Context, id uuid.UUID) error { return nil }
 
 // Tests start here
 

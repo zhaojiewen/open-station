@@ -19,6 +19,8 @@ type Config struct {
 	Safe         SafeConfig         `mapstructure:"safe"`
 	LoadBalancer LoadBalancerConfig `mapstructure:"load_balancer"`
 	Plugins      PluginsConfig      `mapstructure:"plugins"`
+	Notification NotificationConfig `mapstructure:"notification"`
+	Auth         AuthConfig         `mapstructure:"auth"`
 }
 
 type ServerConfig struct {
@@ -302,6 +304,15 @@ type PluginSandboxConfig struct {
 	TimeoutSeconds   int      `mapstructure:"timeout_seconds"`
 }
 
+// NotificationConfig configures notification services for budget alerts
+type NotificationConfig struct {
+	SMTPHost     string `mapstructure:"smtp_host"`
+	SMTPPort     int    `mapstructure:"smtp_port"`
+	SMTPUser     string `mapstructure:"smtp_user"`
+	SMTPPassword string `mapstructure:"smtp_password"`
+	SMTPFrom     string `mapstructure:"smtp_from"`
+}
+
 func Load(configPath string) (*Config, error) {
 	viper.SetConfigFile(configPath)
 	viper.AutomaticEnv()
@@ -316,4 +327,58 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// ==================== Auth配置 ====================
+
+// AuthConfig 认证相关配置
+type AuthConfig struct {
+	JWT           JWTConfig           `mapstructure:"jwt"`
+	Encryption    EncryptionConfig    `mapstructure:"encryption"`
+	LoginSecurity LoginSecurityConfig `mapstructure:"login_security"`
+	Password      PasswordConfig      `mapstructure:"password"`
+	EmailEncryption EmailEncryptionConfig `mapstructure:"email_encryption"`
+}
+
+// JWTConfig JWT配置
+type JWTConfig struct {
+	SecretKey         string        `mapstructure:"secret_key"`          // JWT签名密钥
+	AccessTokenExpiry time.Duration `mapstructure:"access_token_expire"` // Access token有效期 (默认15m)
+	RefreshTokenExpiry time.Duration `mapstructure:"refresh_token_expire"` // Refresh token有效期 (默认168h)
+}
+
+// EncryptionConfig 加密配置
+type EncryptionConfig struct {
+	DataKey    string `mapstructure:"data_key"`     // AES-256数据加密密钥 (32字节)
+	JWTKey     string `mapstructure:"jwt_key"`      // JWT签名密钥 (复用或独立)
+	KeyVersion int    `mapstructure:"key_version"`  // 密钥版本号
+}
+
+// LoginSecurityConfig 登录安全配置
+type LoginSecurityConfig struct {
+	MaxFailedAttempts int           `mapstructure:"max_failed_attempts"` // 最大失败次数
+	FailedWindow      time.Duration `mapstructure:"failed_window"`       // 失败计数窗口
+	BlockDuration     time.Duration `mapstructure:"block_duration"`      // 封禁时长
+	EnableAuditLog    bool          `mapstructure:"enable_audit_log"`    // 记录审计日志
+	EncryptAuditData  bool          `mapstructure:"encrypt_audit_data"`  // 加密审计日志
+	AnomalyDetection  bool          `mapstructure:"anomaly_detection"`   // 异常登录检测
+	NewDeviceAlert    bool          `mapstructure:"new_device_alert"`    // 新设备提醒
+}
+
+// PasswordConfig 密码配置
+type PasswordConfig struct {
+	MinLength       int  `mapstructure:"min_length"`       // 最小长度
+	MaxLength       int  `mapstructure:"max_length"`       // 最大长度
+	RequireUpper    bool `mapstructure:"require_upper"`    // 需要大写字母
+	RequireLower    bool `mapstructure:"require_lower"`    // 需要小写字母
+	RequireDigit    bool `mapstructure:"require_digit"`    // 需要数字
+	RequireSpecial  bool `mapstructure:"require_special"`  // 需要特殊字符
+	HistoryCount    int  `mapstructure:"history_count"`    // 检查历史密码数
+	BcryptCost      int  `mapstructure:"bcrypt_cost"`      // bcrypt cost参数 (默认12)
+}
+
+// EmailEncryptionConfig 邮箱加密配置
+type EmailEncryptionConfig struct {
+	Enabled           bool `mapstructure:"enabled"`             // 是否加密邮箱
+	StoreHashForQuery bool `mapstructure:"store_hash_for_query"` // 存hash用于查询
 }

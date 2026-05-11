@@ -91,13 +91,6 @@ jobs:
       - name: Test plugin system
         run: go test -v ./pkg/plugin/... ./plugins/...
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          file: coverage.out
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-
   # Build binaries for all platforms
   build:
     name: Build (${{ matrix.target }})

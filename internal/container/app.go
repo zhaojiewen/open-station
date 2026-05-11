@@ -20,21 +20,36 @@ import (
 	"github.com/zhaojiewen/open-station/internal/infrastructure/proxy"
 	"github.com/zhaojiewen/open-station/pkg/config"
 	"github.com/zhaojiewen/open-station/pkg/logger"
+	"github.com/zhaojiewen/open-station/pkg/password"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 // RepositoriesContainer holds all repository instances
 type RepositoriesContainer struct {
-	Tenant         repository.TenantRepository
-	User           repository.UserRepository
-	APIKey         repository.APIKeyRepository
-	Model          repository.ModelRepository
-	Usage          repository.UsageRepository
-	Bill           repository.BillRepository
-	Recharge       repository.RechargeRepository
-	AuditLog       repository.AuditLogRepository
+	Tenant          repository.TenantRepository
+	User            repository.UserRepository
+	APIKey          repository.APIKeyRepository
+	Model           repository.ModelRepository
+	Usage           repository.UsageRepository
+	Bill            repository.BillRepository
+	Recharge        repository.RechargeRepository
+	AuditLog        repository.AuditLogRepository
 	ProviderAccount repository.ProviderAccountRepository
+	PlatformAdmin   repository.PlatformAdminRepository
+	TenantApp       repository.TenantApplicationRepository
+	UserApp         repository.UserApplicationRepository
+	BudgetAlert     repository.BudgetAlertRepository
+	// Payment system repositories
+	UserQuota         repository.UserQuotaRepository
+	MemberQuota       repository.MemberQuotaRepository
+	CreditApplication repository.CreditApplicationRepository
+	PaymentOrder      repository.PaymentOrderRepository
+	// Auth repositories
+	UserTenant       repository.UserTenantRepository
+	LoginAudit       repository.LoginAuditRepository
+	PasswordHistory  repository.PasswordHistoryRepository
+	RefreshToken     repository.RefreshTokenRepository
 }
 
 // ServicesContainer holds all service instances
@@ -46,6 +61,19 @@ type ServicesContainer struct {
 	ProviderAccount  *service.ProviderAccountService
 	Init             *service.InitService
 	AsyncBilling     *service.AsyncBillingQueue
+	Plugin           *service.PluginService
+	CostLimit        *service.CostLimitService
+	UserApplication  *service.UserApplicationService
+	TenantApplication *service.TenantApplicationService
+	BudgetAlert      *service.BudgetAlertService
+	Notification     *service.NotificationService
+	PlatformAuth     *auth.PlatformAuthService
+	// Payment system services
+	Quota *service.QuotaService
+	// User auth services
+	JWTService      *auth.JWTService
+	UserAuthService *auth.UserAuthService
+	LoginSecurity   *auth.LoginSecurityService
 }
 
 // InfrastructureContainer holds infrastructure components
@@ -141,6 +169,20 @@ func (c *AppContainer) initRepositories() {
 		Recharge:        repositories.NewRechargeRepository(c.Infrastructure.DB),
 		AuditLog:        repositories.NewAuditLogRepository(c.Infrastructure.DB),
 		ProviderAccount: repositories.NewProviderAccountRepository(c.Infrastructure.DB),
+		PlatformAdmin:   repositories.NewPlatformAdminRepository(c.Infrastructure.DB),
+		TenantApp:       repositories.NewTenantApplicationRepository(c.Infrastructure.DB),
+		UserApp:         repositories.NewUserApplicationRepository(c.Infrastructure.DB),
+		BudgetAlert:     repositories.NewBudgetAlertRepository(c.Infrastructure.DB),
+		// Payment system repositories
+		UserQuota:         repositories.NewUserQuotaRepository(c.Infrastructure.DB),
+		MemberQuota:       repositories.NewMemberQuotaRepository(c.Infrastructure.DB),
+		CreditApplication: repositories.NewCreditApplicationRepository(c.Infrastructure.DB),
+		PaymentOrder:      repositories.NewPaymentOrderRepository(c.Infrastructure.DB),
+		// Auth repositories
+		UserTenant:       repositories.NewUserTenantRepository(c.Infrastructure.DB),
+		LoginAudit:       repositories.NewLoginAuditRepository(c.Infrastructure.DB),
+		PasswordHistory:  repositories.NewPasswordHistoryRepository(c.Infrastructure.DB),
+		RefreshToken:     repositories.NewRefreshTokenRepository(c.Infrastructure.DB),
 	}
 }
 
@@ -174,11 +216,128 @@ func (c *AppContainer) initServices(cfg *ContainerConfig) error {
 		cfg.Config.Server.EncryptionKey,
 	)
 
+	// Notification service (for budget alerts)
+	c.Services.Notification = service.NewNotificationService(
+		cfg.Config.Notification.SMTPHost,
+		cfg.Config.Notification.SMTPUser,
+		cfg.Config.Notification.SMTPPassword,
+		cfg.Config.Notification.SMTPFrom,
+		cfg.Config.Notification.SMTPPort,
+	)
+
+	// Cost limit service
+	c.Services.CostLimit = service.NewCostLimitService(
+		c.Repositories.Tenant,
+		c.Repositories.User,
+		c.Repositories.APIKey,
+	)
+
+	// Tenant application service
+	c.Services.TenantApplication = service.NewTenantApplicationService(
+		c.Repositories.TenantApp,
+		c.Repositories.Tenant,
+		c.Repositories.User,
+		c.Repositories.APIKey,
+	)
+
+	// User application service
+	c.Services.UserApplication = service.NewUserApplicationService(
+		c.Repositories.UserApp,
+		c.Repositories.User,
+		c.Repositories.Tenant,
+	)
+
+	// Budget alert service
+	c.Services.BudgetAlert = service.NewBudgetAlertService(
+		c.Repositories.BudgetAlert,
+		c.Repositories.Tenant,
+		c.Repositories.User,
+		c.Repositories.APIKey,
+		c.Services.Notification,
+	)
+
+	// Platform auth service
+	c.Services.PlatformAuth = auth.NewPlatformAuthService(
+		c.Repositories.PlatformAdmin,
+	)
+
+	// JWT Service (用户认证)
+	jwtSecret := cfg.Config.Auth.JWT.SecretKey
+	if jwtSecret == "" {
+		jwtSecret = cfg.Config.Server.EncryptionKey // fallback
+	}
+	accessTokenExpiry := cfg.Config.Auth.JWT.AccessTokenExpiry
+	if accessTokenExpiry == 0 {
+		accessTokenExpiry = 15 * time.Minute
+	}
+	refreshTokenExpiry := cfg.Config.Auth.JWT.RefreshTokenExpiry
+	if refreshTokenExpiry == 0 {
+		refreshTokenExpiry = 7 * 24 * time.Hour
+	}
+
+	c.Services.JWTService = auth.NewJWTService(
+		jwtSecret,
+		accessTokenExpiry,
+		refreshTokenExpiry,
+		c.Infrastructure.Redis,
+	)
+
+	// Login Security Service
+	c.Services.LoginSecurity = auth.NewLoginSecurityService(
+		c.Infrastructure.Redis,
+		c.Repositories.LoginAudit,
+		c.Repositories.PasswordHistory,
+		cfg.Config.Auth.Encryption.DataKey,
+		cfg.Config.Auth.LoginSecurity.MaxFailedAttempts,
+		cfg.Config.Auth.LoginSecurity.FailedWindow,
+		cfg.Config.Auth.LoginSecurity.BlockDuration,
+		cfg.Config.Auth.LoginSecurity.EnableAuditLog,
+		cfg.Config.Auth.LoginSecurity.EncryptAuditData,
+	)
+
+	// Password hasher
+	passwordCost := cfg.Config.Auth.Password.BcryptCost
+	if passwordCost < 10 {
+		passwordCost = 12
+	}
+	passwordHasher := password.NewPasswordHasher(passwordCost)
+
+	// Public tenant slug
+	publicTenantSlug := cfg.Config.Admin.DefaultTenantSlug
+	if publicTenantSlug == "" {
+		publicTenantSlug = "public"
+	}
+
+	// User Auth Service
+	c.Services.UserAuthService = auth.NewUserAuthService(
+		c.Repositories.User,
+		c.Repositories.Tenant,
+		c.Repositories.UserTenant,
+		c.Repositories.RefreshToken,
+		c.Services.JWTService,
+		c.Services.LoginSecurity,
+		passwordHasher,
+		c.Infrastructure.Redis,
+		publicTenantSlug,
+	)
+
+	// Quota service (payment system)
+	c.Services.Quota = service.NewQuotaService(
+		c.Repositories.UserQuota,
+		c.Repositories.MemberQuota,
+		c.Repositories.Tenant,
+	)
+
 	// MCP service
 	c.Services.MCP = service.NewMCPService(
 		c.Services.Auth,
 		c.Services.Billing,
 		c.Services.ProviderAccount,
+		c.Services.Plugin,
+		c.Services.CostLimit,
+		c.Services.UserApplication,
+		c.Services.TenantApplication,
+		c.Services.BudgetAlert,
 	)
 
 	// Init service
