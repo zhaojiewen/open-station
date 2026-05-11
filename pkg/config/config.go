@@ -333,11 +333,12 @@ func Load(configPath string) (*Config, error) {
 
 // AuthConfig 认证相关配置
 type AuthConfig struct {
-	JWT           JWTConfig           `mapstructure:"jwt"`
-	Encryption    EncryptionConfig    `mapstructure:"encryption"`
-	LoginSecurity LoginSecurityConfig `mapstructure:"login_security"`
-	Password      PasswordConfig      `mapstructure:"password"`
-	EmailEncryption EmailEncryptionConfig `mapstructure:"email_encryption"`
+	JWT              JWTConfig              `mapstructure:"jwt"`
+	Encryption       EncryptionConfig       `mapstructure:"encryption"`
+	LoginSecurity    LoginSecurityConfig    `mapstructure:"login_security"`
+	Password         PasswordConfig         `mapstructure:"password"`
+	EmailEncryption  EmailEncryptionConfig  `mapstructure:"email_encryption"`
+	EmailVerification EmailVerificationConfig `mapstructure:"email_verification"`
 }
 
 // JWTConfig JWT配置
@@ -381,4 +382,10 @@ type PasswordConfig struct {
 type EmailEncryptionConfig struct {
 	Enabled           bool `mapstructure:"enabled"`             // 是否加密邮箱
 	StoreHashForQuery bool `mapstructure:"store_hash_for_query"` // 存hash用于查询
+}
+
+// EmailVerificationConfig 邮箱验证配置
+type EmailVerificationConfig struct {
+	Enabled            bool `mapstructure:"enabled"`              // 是否启用邮箱验证（默认true）
+	TokenExpiryHours   int  `mapstructure:"token_expiry_hours"`   // 验证token过期时间（小时，默认24）
 }

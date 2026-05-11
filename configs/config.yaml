@@ -221,3 +221,48 @@ plugins:
     #   capabilities:
     #     - chat
     #     - stream
+
+# Authentication Configuration
+auth:
+  # JWT Configuration
+  jwt:
+    secret_key: "your-jwt-secret-key-change-in-production-min-32-chars"  # JWT signing key (min 32 chars for security)
+    access_token_expire: 15m       # Access token expires in 15 minutes
+    refresh_token_expire: 168h     # Refresh token expires in 7 days (168 hours)
+
+  # Encryption Configuration
+  encryption:
+    data_key: ""                   # AES-256 data encryption key (32 bytes hex-encoded)
+    jwt_key: ""                    # JWT signing key (use jwt.secret_key if empty)
+    key_version: 1                 # Key version for rotation
+
+  # Login Security Configuration
+  login_security:
+    max_failed_attempts: 10        # Max failed login attempts before block
+    failed_window: 5m              # Failed attempts counting window
+    block_duration: 15m            # Block duration after max failed attempts
+    enable_audit_log: true         # Enable login audit logging
+    encrypt_audit_data: false      # Encrypt sensitive audit data (IP, UserAgent)
+    anomaly_detection: true        # Enable anomaly detection for login
+    new_device_alert: true         # Alert on new device login
+
+  # Password Configuration
+  password:
+    min_length: 8                  # Minimum password length
+    max_length: 64                 # Maximum password length
+    require_upper: true            # Require uppercase letter
+    require_lower: true            # Require lowercase letter
+    require_digit: true            # Require digit
+    require_special: true          # Require special character
+    history_count: 5               # Check last 5 passwords in history
+    bcrypt_cost: 12                # bcrypt cost parameter (10-14)
+
+  # Email Encryption Configuration
+  email_encryption:
+    enabled: false                 # Encrypt email addresses in database
+    store_hash_for_query: true     # Store email hash for querying
+
+  # Email Verification - require email verification for registration
+  email_verification:
+    enabled: true                  # Enable email verification (both user & tenant registration)
+    token_expiry_hours: 24         # Verification token expires after 24 hours

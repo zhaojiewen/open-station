@@ -226,11 +226,41 @@ func (h *AuthHandler) RegisterTenant(c *gin.Context) {
 
 	resp, err := h.userAuthService.RegisterTenant(ctx, registerReq)
 	if err != nil {
+		if errors.Is(err, errors.ErrEmailNotVerified) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":          "email not verified, please verify your existing account first",
+				"code":           "VERIFY_004",
+				"require_verify": true,
+			})
+			return
+		}
 		if errors.IsRegisterError(err) || errors.IsTenantError(err) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Check if email verification is required
+	if resp.AccessToken == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"tenant": gin.H{
+				"id":     resp.Tenant.ID,
+				"name":   resp.Tenant.Name,
+				"slug":   resp.Tenant.Slug,
+				"status": resp.Tenant.Status,
+				"plan":   resp.Tenant.Plan,
+			},
+			"user": gin.H{
+				"id":    resp.User.ID,
+				"email": resp.User.Email,
+				"name":  resp.User.Name,
+				"role":  resp.UserTenant.Role,
+			},
+			"message":        "registration successful, please verify your email to activate the account",
+			"require_verify": true,
+		})
 		return
 	}
 

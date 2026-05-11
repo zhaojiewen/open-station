@@ -447,8 +447,10 @@ func (s *UserAuthService) RegisterTenant(ctx context.Context, req *RegisterTenan
 	// 4. 检查邮箱是否已注册
 	existingUser, err := s.userRepo.GetByEmail(ctx, req.Email)
 	if err == nil && existingUser != nil {
-		// 邮箱已存在，检查是否可以加入新租户
-		// 这里允许一个用户拥有多个租户
+		// 如果用户已存在但未验证，拒绝注册（需要先验证现有账号）
+		if !existingUser.EmailVerified && s.requireEmailVerify {
+			return nil, apperrors.ErrEmailNotVerified
+		}
 	}
 
 	// 5. 检查租户slug是否已存在
@@ -480,8 +482,10 @@ func (s *UserAuthService) RegisterTenant(ctx context.Context, req *RegisterTenan
 
 	// 7. 创建或获取用户
 	var user *entity.User
+	var isNewUser bool
 	if existingUser != nil {
 		user = existingUser
+		isNewUser = false
 	} else {
 		userID := uuid.New()
 		passwordHash, err := s.passwordHasher.Hash(req.Password)
@@ -490,21 +494,23 @@ func (s *UserAuthService) RegisterTenant(ctx context.Context, req *RegisterTenan
 		}
 
 		user = &entity.User{
-			ID:           userID,
-			TenantID:     tenantID,
-			Email:        req.Email,
-			PasswordHash: passwordHash,
-			Name:         req.Name,
-			Role:         "admin",
-			Status:       "active",
-			UserMode:     "organization",
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
+			ID:            userID,
+			TenantID:      tenantID,
+			Email:         req.Email,
+			PasswordHash:  passwordHash,
+			Name:          req.Name,
+			Role:          "admin",
+			Status:        "pending_verification",
+			UserMode:      "organization",
+			EmailVerified: false,
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
 		}
 
 		if err := s.userRepo.Create(ctx, user); err != nil {
 			return nil, fmt.Errorf("failed to create user: %w", err)
 		}
+		isNewUser = true
 	}
 
 	// 8. 创建UserTenant关联（管理员角色）
@@ -524,41 +530,64 @@ func (s *UserAuthService) RegisterTenant(ctx context.Context, req *RegisterTenan
 	s.userTenantRepo.ClearDefaultTenants(ctx, user.ID)
 	s.userTenantRepo.SetDefaultTenant(ctx, user.ID, tenantID)
 
-	// 10. 生成设备指纹
-	deviceID := GenerateDeviceID(req.UserAgent, req.IP)
-
-	// 11. 生成JWT token
-	accessToken, refreshToken, _, err := s.jwtService.GenerateToken(
-		user.ID,
-		tenantID,
-		user.Email,
-		"admin",
-		deviceID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate token: %w", err)
+	// 10. 发送验证邮件（如果需要）
+	if s.requireEmailVerify && s.emailVerification != nil {
+		if isNewUser || !user.EmailVerified {
+			if err := s.emailVerification.SendVerificationEmail(ctx, user); err != nil {
+				// 发送失败不阻止注册，但返回提示
+				return &RegisterTenantResponse{
+					Tenant:       tenant,
+					User:         user,
+					UserTenant:   userTenant,
+					AccessToken:  "",
+					RefreshToken: "",
+				}, nil
+			}
+		}
 	}
 
-	// 12. 存储refresh token
-	refreshTokenHash := hashToken(refreshToken)
-	refreshTokenRecord := &entity.RefreshToken{
-		UserID:     user.ID,
-		TokenHash:  refreshTokenHash,
-		DeviceID:   deviceID,
-		ExpiresAt:  time.Now().Add(s.jwtService.GetRefreshTokenExpiry()),
+	// 11. 如果不需要邮箱验证，直接生成token
+	if !s.requireEmailVerify {
+		deviceID := GenerateDeviceID(req.UserAgent, req.IP)
+		accessToken, refreshToken, _, err := s.jwtService.GenerateToken(
+			user.ID,
+			tenantID,
+			user.Email,
+			"admin",
+			deviceID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate token: %w", err)
+		}
+
+		refreshTokenHash := hashToken(refreshToken)
+		refreshTokenRecord := &entity.RefreshToken{
+			UserID:     user.ID,
+			TokenHash:  refreshTokenHash,
+			DeviceID:   deviceID,
+			ExpiresAt:  time.Now().Add(s.jwtService.GetRefreshTokenExpiry()),
+		}
+		s.refreshTokenRepo.Create(ctx, refreshTokenRecord)
+
+		s.loginSecurity.RecordSuccessfulLogin(ctx, user.ID, user.Email, req.IP, req.UserAgent, deviceID, &tenantID)
+
+		return &RegisterTenantResponse{
+			Tenant:       tenant,
+			User:         user,
+			UserTenant:   userTenant,
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			ExpiresAt:    time.Now().Add(s.jwtService.GetAccessTokenExpiry()),
+		}, nil
 	}
-	s.refreshTokenRepo.Create(ctx, refreshTokenRecord)
 
-	// 13. 记录成功登录
-	s.loginSecurity.RecordSuccessfulLogin(ctx, user.ID, user.Email, req.IP, req.UserAgent, deviceID, &tenantID)
-
+	// 需要验证，返回无token的响应
 	return &RegisterTenantResponse{
 		Tenant:       tenant,
 		User:         user,
 		UserTenant:   userTenant,
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresAt:    time.Now().Add(s.jwtService.GetAccessTokenExpiry()),
+		AccessToken:  "",
+		RefreshToken: "",
 	}, nil
 }
 

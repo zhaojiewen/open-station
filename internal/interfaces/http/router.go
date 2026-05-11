@@ -217,9 +217,7 @@ func (r *Router) setupRoutes() {
 		admin.GET("/users", func(c *gin.Context) {
 			c.JSON(200, gin.H{"message": "users endpoint - to be implemented"})
 		})
-		admin.POST("/users", func(c *gin.Context) {
-			c.JSON(200, gin.H{"message": "users endpoint - to be implemented"})
-		})
+		// admin.POST("/users") - implemented below via userAppHandler.AdminCreateUser
 		admin.GET("/users/:id", func(c *gin.Context) {
 			c.JSON(200, gin.H{"message": "user endpoint - to be implemented"})
 		})
