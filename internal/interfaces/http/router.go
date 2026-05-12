@@ -15,6 +15,8 @@ import (
 type Router struct {
 	engine             *gin.Engine
 	proxyHandler       *handler.ProxyHandler
+	dynamicProxyHandler *handler.DynamicProxyHandler
+	providerAccountHandler *handler.ProviderAccountHandler
 	anthropicHandler   *handler.AnthropicHandler
 	mcpHandler         *handler.MCPHandler
 	billingHandler     *handler.BillingHandler
@@ -45,6 +47,8 @@ type Router struct {
 
 func NewRouter(
 	proxyService *proxy.ProxyService,
+	dynamicProxyHandler *handler.DynamicProxyHandler,
+	providerAccountHandler *handler.ProviderAccountHandler,
 	billingService *service.BillingService,
 	asyncBilling *service.AsyncBillingQueue,
 	authService *auth.AuthService,
@@ -74,6 +78,8 @@ func NewRouter(
 	r := &Router{
 		engine: gin.New(),
 		proxyHandler: handler.NewProxyHandler(proxyService, billingService, asyncBilling, authService),
+			dynamicProxyHandler: dynamicProxyHandler,
+			providerAccountHandler: providerAccountHandler,
 		anthropicHandler: handler.NewAnthropicHandler(proxyService, authService, billingService),
 		mcpHandler: handler.NewMCPHandler(mcpService),
 		billingHandler: handler.NewBillingHandler(billingService),
@@ -192,7 +198,7 @@ func (r *Router) setupRoutes() {
 		proxyGroup.Use(r.authMiddleware)
 		proxyGroup.Use(r.rateLimitMiddleware)
 		{
-			proxyGroup.POST("/chat/completions", r.proxyHandler.ChatCompletions)
+			proxyGroup.POST("/chat/completions", r.dynamicProxyHandler.ChatCompletions)
 			proxyGroup.POST("/embeddings", r.proxyHandler.Embeddings)
 		}
 
@@ -200,8 +206,8 @@ func (r *Router) setupRoutes() {
 		directGroup.Use(r.authMiddleware)
 		directGroup.Use(r.rateLimitMiddleware)
 		{
-			directGroup.POST("/chat/completions", r.proxyHandler.ChatCompletions)
-			directGroup.POST("/messages", r.proxyHandler.ChatCompletions)
+			directGroup.POST("/chat/completions", r.dynamicProxyHandler.ChatCompletions)
+			directGroup.POST("/messages", r.dynamicProxyHandler.ChatCompletions)
 			directGroup.POST("/embeddings", r.proxyHandler.Embeddings)
 		}
 	}
@@ -287,6 +293,19 @@ func (r *Router) setupRoutes() {
 			admin.POST("/budget/alerts/:id/enable", r.budgetAlertHandler.Enable)
 			admin.POST("/budget/alerts/:id/disable", r.budgetAlertHandler.Disable)
 			admin.DELETE("/budget/alerts/:id", r.budgetAlertHandler.Delete)
+
+			// Provider account management (multi-key support with failover)
+			if r.providerAccountHandler != nil {
+				admin.GET("/providers/:provider/status", r.providerAccountHandler.GetProviderStatus)
+				admin.GET("/providers/status", r.providerAccountHandler.GetAllProvidersStatus)
+				admin.POST("/providers/:provider/switch", r.providerAccountHandler.SwitchAccount)
+				admin.GET("/providers/accounts/:account_id", r.providerAccountHandler.GetAccountDetail)
+				admin.GET("/providers/:provider/history", r.providerAccountHandler.GetSwitchHistory)
+				admin.POST("/providers/accounts/:account_id/recover", r.providerAccountHandler.ManualRecoverAccount)
+				admin.GET("/providers/metrics", r.providerAccountHandler.GetRealTimeMetrics)
+				admin.POST("/providers/cache/refresh", r.providerAccountHandler.ForceRefreshCache)
+				admin.GET("/providers/cache/stats", r.providerAccountHandler.GetCacheStats)
+			}
 	}
 
 	user := r.engine.Group("/user")
