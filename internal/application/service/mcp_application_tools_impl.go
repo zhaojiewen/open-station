@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	domainrole "github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/pkg/mcp"
 )
 
@@ -23,7 +24,7 @@ func (s *MCPService) toolSendUserInvitation(ctx context.Context, args map[string
 	name, _ := args["name"].(string)
 	requestedRole, _ := args["requested_role"].(string)
 	if requestedRole == "" {
-		requestedRole = "member"
+		requestedRole = domainrole.TenantRoleMember
 	}
 
 	var expiresIn int64
@@ -172,7 +173,7 @@ func (s *MCPService) toolCreateUserDirect(ctx context.Context, args map[string]i
 
 	role, _ := args["role"].(string)
 	if role == "" {
-		role = "member"
+		role = domainrole.TenantRoleMember
 	}
 
 	user, err := s.userAppService.CreateDirectSimple(ctx, email, name, password, role)

@@ -43,12 +43,6 @@ func (h *SettlementHandler) CheckTrigger(c *gin.Context) {
 func (h *SettlementHandler) TriggerSettlement(c *gin.Context) {
 	tenantID := middleware.GetTenantID(c)
 
-	user := middleware.GetUser(c)
-	if user == nil || user.Role != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "admin permission required"})
-		return
-	}
-
 	bill, err := h.settlementSvc.TriggerSettlement(c.Request.Context(), tenantID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

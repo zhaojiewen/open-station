@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/zhaojiewen/open-station/internal/domain/entity"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/pkg/config"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -110,7 +111,7 @@ func (s *InitService) InitializeDefaultAdmin(ctx context.Context) (*InitResult, 
 		TenantID:     tenant.ID,
 		Email:        s.cfg.SuperAdminEmail,
 		Name:         s.cfg.DefaultAdminUser,
-		Role:         "admin",
+		Role:         role.TenantRoleAdmin,
 		Status:       "active",
 		PasswordHash: string(passwordHash),
 		CreatedAt:    time.Now(),
@@ -135,7 +136,7 @@ func (s *InitService) InitializeDefaultAdmin(ctx context.Context) (*InitResult, 
 	keyHashStr := hex.EncodeToString(keyHash[:])
 	keyPrefix := rawKey[:12]
 
-	permissionsJSON, _ := json.Marshal([]string{"admin", "manage", "chat"})
+	permissionsJSON, _ := json.Marshal([]string{role.PermAdmin, role.PermManage, role.PermChat})
 	emptyJSON, _ := json.Marshal([]string{})
 
 	apiKey := &entity.APIKey{

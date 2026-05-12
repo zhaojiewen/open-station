@@ -116,6 +116,10 @@ var (
 	ErrPlatformAdminInactive    = NewAppError("PLAT_002", "platform admin inactive", nil)
 	ErrPlatformPermissionDenied = NewAppError("PLAT_003", "platform permission denied", nil)
 	ErrPlatformAdminExists      = NewAppError("PLAT_004", "platform admin email already exists", nil)
+	ErrInvalidPlatformRole        = NewAppError("PLAT_005", "invalid platform admin role", nil)
+	ErrCannotDemoteLastSuperAdmin = NewAppError("PLAT_006", "cannot change role of the last super admin", nil)
+	ErrCannotDeleteSelf           = NewAppError("PLAT_007", "cannot delete or deactivate your own account", nil)
+	ErrCannotDeleteLastSuperAdmin = NewAppError("PLAT_008", "cannot delete the last super admin", nil)
 
 	// ===== 用户错误 (USER) =====
 	ErrUserNotFound             = NewAppError("USER_001", "user not found", nil)

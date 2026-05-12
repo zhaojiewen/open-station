@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/zhaojiewen/open-station/internal/domain/entity"
+	domainrole "github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/pkg/mcp"
 )
 
@@ -106,7 +107,7 @@ func (s *MCPService) toolCreateAPIKey(ctx context.Context, args map[string]inter
 				TenantID:  tenantID,
 				Email:     userEmail,
 				Name:      userName,
-				Role:      "member",
+				Role:      domainrole.TenantRoleMember,
 				Status:    "active",
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
@@ -128,7 +129,7 @@ func (s *MCPService) toolCreateAPIKey(ctx context.Context, args map[string]inter
 	// Parse permissions
 	permissions := s.parseStringArray(args["permissions"])
 	if len(permissions) == 0 {
-		permissions = []string{"chat"}
+		permissions = []string{domainrole.PermChat}
 	}
 	models := s.parseStringArray(args["models"])
 	providers := s.parseStringArray(args["providers"])

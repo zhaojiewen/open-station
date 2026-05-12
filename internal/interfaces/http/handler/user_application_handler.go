@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhaojiewen/open-station/internal/application/service"
 	"github.com/zhaojiewen/open-station/internal/domain/repository"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/auth"
 	"github.com/zhaojiewen/open-station/internal/interfaces/http/middleware"
 )
@@ -59,7 +60,11 @@ func (h *UserApplicationHandler) SubmitRequest(c *gin.Context) {
 
 	// Default role to member
 	if req.RequestedRole == "" {
-		req.RequestedRole = "member"
+		req.RequestedRole = role.TenantRoleMember
+	}
+	if err := role.RequireRequestableRole(req.RequestedRole); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	app, err := h.appService.SubmitRequest(c.Request.Context(), tenantID, req.Email, req.Name, req.RequestedRole)
@@ -240,7 +245,11 @@ func (h *UserApplicationHandler) AdminSendInvitation(c *gin.Context) {
 
 	// Default role to member
 	if req.RequestedRole == "" {
-		req.RequestedRole = "member"
+		req.RequestedRole = role.TenantRoleMember
+	}
+	if err := role.RequireRequestableRole(req.RequestedRole); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	app, err := h.appService.SendInvitation(c.Request.Context(), tenantID, req.Email, req.Name, req.RequestedRole, userID, req.ExpiresIn)
@@ -277,7 +286,12 @@ func (h *UserApplicationHandler) AdminCreateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.appService.CreateDirect(c.Request.Context(), tenantID, req.Email, req.Name, req.Role, req.Password, userID)
+	if err := role.RequireTenantRole(req.Role); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		user, err := h.appService.CreateDirect(c.Request.Context(), tenantID, req.Email, req.Name, req.Role, req.Password, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/zhaojiewen/open-station/internal/application/service"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/payment"
 	"github.com/zhaojiewen/open-station/internal/interfaces/http/middleware"
 )
@@ -332,7 +333,7 @@ func (h *PaymentHandler) GetPendingOrders(c *gin.Context) {
 
 	var tenantIDPtr *uuid.UUID
 	userObj := middleware.GetUser(c)
-	if userObj != nil && userObj.Role == "admin" {
+	if userObj != nil && role.IsTenantAdmin(userObj.Role) {
 		tenantIDPtr = &tenantID
 	}
 

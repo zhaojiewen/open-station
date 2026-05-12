@@ -259,6 +259,7 @@ func (c *AppContainer) initServices(cfg *ContainerConfig) error {
 	// Platform auth service
 	c.Services.PlatformAuth = auth.NewPlatformAuthService(
 		c.Repositories.PlatformAdmin,
+		c.Repositories.AuditLog,
 	)
 
 	// JWT Service (用户认证)

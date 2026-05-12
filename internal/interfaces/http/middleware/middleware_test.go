@@ -109,11 +109,14 @@ func TestAdminOnlyMiddleware_Admin(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
+	tenantID := uuid.New()
 	user := &entity.User{
-		ID:   uuid.New(),
-		Role: "admin",
+		ID:       uuid.New(),
+		Role:     "admin",
+		TenantID: tenantID,
 	}
 	c.Set("user", user)
+	c.Set("tenant_id", tenantID)
 
 	middleware := AdminOnlyMiddleware()
 	middleware(c)
@@ -286,10 +289,13 @@ func TestAdminMiddleware_RoleChecking(t *testing.T) {
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 
+			tenantID := uuid.New()
 			user := &entity.User{
-				Role: tc.role,
+				Role:     tc.role,
+				TenantID: tenantID,
 			}
 			c.Set("user", user)
+			c.Set("tenant_id", tenantID)
 
 			middleware := AdminOnlyMiddleware()
 			middleware(c)

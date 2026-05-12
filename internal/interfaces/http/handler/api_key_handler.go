@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/auth"
 )
 
@@ -50,7 +51,7 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 
 	permissions := req.Permissions
 	if len(permissions) == 0 {
-		permissions = []string{"chat", "embeddings"}
+		permissions = []string{role.PermChat, role.PermEmbeddings}
 	}
 
 	var expiresAt *time.Time
@@ -154,7 +155,7 @@ func (h *APIKeyHandler) CreateMyAPIKey(c *gin.Context) {
 
 	permissions := req.Permissions
 	if len(permissions) == 0 {
-		permissions = []string{"chat", "embeddings"}
+		permissions = []string{role.PermChat, role.PermEmbeddings}
 	}
 
 	var expiresAt *time.Time

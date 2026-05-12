@@ -125,7 +125,7 @@ func (m *mockPlatformAdminRepo) GetPermissions(ctx context.Context, id uuid.UUID
 
 func TestNewPlatformAuthService(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 	if service == nil {
 		t.Error("service should not be nil")
 	}
@@ -197,7 +197,7 @@ func TestPlatformAuthService_Login(t *testing.T) {
 				repo.Create(context.Background(), tt.setupAdmin)
 			}
 
-			service := NewPlatformAuthService(repo)
+			service := NewPlatformAuthService(repo, nil)
 			ctx := context.Background()
 
 			admin, token, err := service.Login(ctx, tt.email, tt.password)
@@ -231,7 +231,7 @@ func TestPlatformAuthService_Login(t *testing.T) {
 func TestPlatformAuthService_LoginWithRepoError(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
 	repo.getError = errors.New("db error")
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	ctx := context.Background()
 	_, _, err := service.Login(ctx, "admin@example.com", "password")
@@ -295,7 +295,7 @@ func TestPlatformAuthService_ValidateSession(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := newMockPlatformAdminRepo()
-			service := NewPlatformAuthService(repo)
+			service := NewPlatformAuthService(repo, nil)
 			ctx := context.Background()
 
 			var testAdminID uuid.UUID
@@ -329,7 +329,7 @@ func TestPlatformAuthService_ValidateSession(t *testing.T) {
 
 func TestPlatformAuthService_ValidateSessionWithExpiredCache(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	passwordHash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
 	admin := &entity.PlatformAdmin{
@@ -361,7 +361,7 @@ func TestPlatformAuthService_ValidateSessionWithExpiredCache(t *testing.T) {
 
 func TestPlatformAuthService_CheckPermission(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	perms := []string{"read", "write"}
 	permsJSON, _ := json.Marshal(perms)
@@ -441,7 +441,7 @@ func TestPlatformAuthService_CheckPermission(t *testing.T) {
 func TestPlatformAuthService_CheckPermissionWithRepoError(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
 	repo.checkPermError = errors.New("repo error")
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	adminID := uuid.New()
 	// Set expired cache to force repo lookup
@@ -462,7 +462,7 @@ func TestPlatformAuthService_CheckPermissionWithRepoError(t *testing.T) {
 
 func TestPlatformAuthService_HasRole(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	passwordHash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
 	admin := &entity.PlatformAdmin{
@@ -508,7 +508,7 @@ func TestPlatformAuthService_HasRole(t *testing.T) {
 
 func TestPlatformAuthService_IsSuperAdmin(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	passwordHash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
 	superAdmin := &entity.PlatformAdmin{
@@ -554,13 +554,13 @@ func TestPlatformAuthService_IsSuperAdmin(t *testing.T) {
 
 func TestPlatformAuthService_CreateAdmin(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	ctx := context.Background()
 
 	// Successful create
 	t.Run("successful create", func(t *testing.T) {
-		admin, err := service.CreateAdmin(ctx, "new@example.com", "password123", "New Admin", "support", []string{"read"})
+		admin, err := service.CreateAdmin(ctx, uuid.Nil, "new@example.com", "password123", "New Admin", "support", []string{"read"})
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -583,7 +583,7 @@ func TestPlatformAuthService_CreateAdmin(t *testing.T) {
 
 	// Duplicate email
 	t.Run("duplicate email", func(t *testing.T) {
-		_, err := service.CreateAdmin(ctx, "new@example.com", "password123", "Duplicate", "support", []string{})
+		_, err := service.CreateAdmin(ctx, uuid.Nil, "new@example.com", "password123", "Duplicate", "support", []string{})
 		if err != apperrors.ErrPlatformAdminExists {
 			t.Errorf("expected ErrPlatformAdminExists, got %v", err)
 		}
@@ -593,9 +593,9 @@ func TestPlatformAuthService_CreateAdmin(t *testing.T) {
 	t.Run("repo error", func(t *testing.T) {
 		repoError := newMockPlatformAdminRepo()
 		repoError.createError = errors.New("create failed")
-		serviceError := NewPlatformAuthService(repoError)
+		serviceError := NewPlatformAuthService(repoError, nil)
 
-		_, err := serviceError.CreateAdmin(ctx, "error@example.com", "password123", "Error Admin", "support", []string{})
+		_, err := serviceError.CreateAdmin(ctx, uuid.Nil, "error@example.com", "password123", "Error Admin", "support", []string{})
 		if err == nil {
 			t.Error("expected error from repo")
 		}
@@ -604,7 +604,7 @@ func TestPlatformAuthService_CreateAdmin(t *testing.T) {
 
 func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	passwordHash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
 	admin := &entity.PlatformAdmin{
@@ -620,7 +620,7 @@ func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 
 	// Update name
 	t.Run("update name", func(t *testing.T) {
-		err := service.UpdateAdmin(ctx, admin.ID, map[string]interface{}{"name": "Updated Name"})
+		err := service.UpdateAdmin(ctx, uuid.Nil, admin.ID, map[string]interface{}{"name": "Updated Name"})
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -632,7 +632,7 @@ func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 
 	// Update role
 	t.Run("update role", func(t *testing.T) {
-		err := service.UpdateAdmin(ctx, admin.ID, map[string]interface{}{"role": "billing_admin"})
+		err := service.UpdateAdmin(ctx, uuid.Nil, admin.ID, map[string]interface{}{"role": "billing_admin"})
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -644,7 +644,7 @@ func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 
 	// Update status
 	t.Run("update status", func(t *testing.T) {
-		err := service.UpdateAdmin(ctx, admin.ID, map[string]interface{}{"status": "inactive"})
+		err := service.UpdateAdmin(ctx, uuid.Nil, admin.ID, map[string]interface{}{"status": "inactive"})
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -656,7 +656,7 @@ func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 
 	// Update permissions
 	t.Run("update permissions", func(t *testing.T) {
-		err := service.UpdateAdmin(ctx, admin.ID, map[string]interface{}{"permissions": []string{"read", "write", "admin"}})
+		err := service.UpdateAdmin(ctx, uuid.Nil, admin.ID, map[string]interface{}{"permissions": []string{"read", "write", "admin"}})
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -671,7 +671,7 @@ func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 	// Update password
 	t.Run("update password", func(t *testing.T) {
 		newPassword := "newpassword123"
-		err := service.UpdateAdmin(ctx, admin.ID, map[string]interface{}{"password": newPassword})
+		err := service.UpdateAdmin(ctx, uuid.Nil, admin.ID, map[string]interface{}{"password": newPassword})
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -684,7 +684,7 @@ func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 
 	// Admin not found
 	t.Run("admin not found", func(t *testing.T) {
-		err := service.UpdateAdmin(ctx, uuid.New(), map[string]interface{}{"name": "New Name"})
+		err := service.UpdateAdmin(ctx, uuid.Nil, uuid.New(), map[string]interface{}{"name": "New Name"})
 		if err != apperrors.ErrPlatformAdminNotFound {
 			t.Errorf("expected ErrPlatformAdminNotFound, got %v", err)
 		}
@@ -693,7 +693,7 @@ func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 	// Verify cache invalidated
 	t.Run("cache invalidated", func(t *testing.T) {
 		service.cacheAdmin(admin)
-		_ = service.UpdateAdmin(ctx, admin.ID, map[string]interface{}{"name": "Cache Test"})
+		_ = service.UpdateAdmin(ctx, uuid.Nil, admin.ID, map[string]interface{}{"name": "Cache Test"})
 		cached := service.getCachedAdmin(admin.ID)
 		if cached != nil {
 			t.Error("cache should be invalidated after update")
@@ -703,7 +703,7 @@ func TestPlatformAuthService_UpdateAdmin(t *testing.T) {
 
 func TestPlatformAuthService_DeleteAdmin(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	passwordHash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
 	admin := &entity.PlatformAdmin{
@@ -717,7 +717,7 @@ func TestPlatformAuthService_DeleteAdmin(t *testing.T) {
 
 	// Successful delete
 	t.Run("successful delete", func(t *testing.T) {
-		err := service.DeleteAdmin(ctx, admin.ID)
+		err := service.DeleteAdmin(ctx, uuid.Nil, admin.ID)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -737,7 +737,7 @@ func TestPlatformAuthService_DeleteAdmin(t *testing.T) {
 		repo.Create(ctx, admin2)
 		service.cacheAdmin(admin2)
 
-		_ = service.DeleteAdmin(ctx, admin2.ID)
+		_ = service.DeleteAdmin(ctx, uuid.Nil, admin2.ID)
 		cached := service.getCachedAdmin(admin2.ID)
 		if cached != nil {
 			t.Error("cache should be invalidated after delete")
@@ -748,9 +748,9 @@ func TestPlatformAuthService_DeleteAdmin(t *testing.T) {
 	t.Run("repo error", func(t *testing.T) {
 		repoError := newMockPlatformAdminRepo()
 		repoError.deleteError = errors.New("delete failed")
-		serviceError := NewPlatformAuthService(repoError)
+		serviceError := NewPlatformAuthService(repoError, nil)
 
-		err := serviceError.DeleteAdmin(ctx, uuid.New())
+		err := serviceError.DeleteAdmin(ctx, uuid.Nil, uuid.New())
 		if err == nil {
 			t.Error("expected error from repo")
 		}
@@ -759,7 +759,7 @@ func TestPlatformAuthService_DeleteAdmin(t *testing.T) {
 
 func TestPlatformAuthService_ListAdmins(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	passwordHash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
 	for i := 0; i < 5; i++ {
@@ -787,7 +787,7 @@ func TestPlatformAuthService_ListAdmins(t *testing.T) {
 
 func TestPlatformAuthService_CacheOperations(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	passwordHash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
 	admin := &entity.PlatformAdmin{
@@ -882,7 +882,7 @@ func TestGenerateSessionToken(t *testing.T) {
 
 func TestPlatformAuthService_ConcurrentCacheAccess(t *testing.T) {
 	repo := newMockPlatformAdminRepo()
-	service := NewPlatformAuthService(repo)
+	service := NewPlatformAuthService(repo, nil)
 
 	passwordHash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
 	admin := &entity.PlatformAdmin{

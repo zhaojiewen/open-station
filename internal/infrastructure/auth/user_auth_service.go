@@ -15,6 +15,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/zhaojiewen/open-station/internal/domain/entity"
 	"github.com/zhaojiewen/open-station/internal/domain/repository"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	apperrors "github.com/zhaojiewen/open-station/pkg/errors"
 	"github.com/zhaojiewen/open-station/pkg/password"
 	"gorm.io/gorm"
@@ -300,7 +301,7 @@ func (s *UserAuthService) Register(ctx context.Context, req *RegisterRequest) (*
 		Email:        req.Email,
 		PasswordHash: passwordHash,
 		Name:         req.Name,
-		Role:         "member",
+		Role:         role.TenantRoleMember,
 		Status:       "pending_verification", // 需要邮箱验证
 		UserMode:     "individual",
 		EmailVerified: false,
@@ -311,7 +312,7 @@ func (s *UserAuthService) Register(ctx context.Context, req *RegisterRequest) (*
 	userTenant := &entity.UserTenant{
 		UserID:    userID,
 		TenantID:  publicTenant.ID,
-		Role:      "member",
+		Role:      role.TenantRoleMember,
 		Status:    "active",
 		IsDefault: true,
 		JoinedAt:  now,
@@ -367,7 +368,7 @@ func (s *UserAuthService) Register(ctx context.Context, req *RegisterRequest) (*
 			user.ID,
 			publicTenant.ID,
 			user.Email,
-			"member",
+			role.TenantRoleMember,
 			deviceID,
 		)
 		if err != nil {
@@ -499,7 +500,7 @@ func (s *UserAuthService) RegisterTenant(ctx context.Context, req *RegisterTenan
 			Email:         req.Email,
 			PasswordHash:  passwordHash,
 			Name:          req.Name,
-			Role:          "admin",
+			Role:          role.TenantRoleAdmin,
 			Status:        "pending_verification",
 			UserMode:      "organization",
 			EmailVerified: false,
@@ -517,7 +518,7 @@ func (s *UserAuthService) RegisterTenant(ctx context.Context, req *RegisterTenan
 	userTenant := &entity.UserTenant{
 		UserID:    user.ID,
 		TenantID:  tenantID,
-		Role:      "admin",
+		Role:      role.TenantRoleAdmin,
 		Status:    "active",
 		IsDefault: true,
 		JoinedAt:  time.Now(),
@@ -553,7 +554,7 @@ func (s *UserAuthService) RegisterTenant(ctx context.Context, req *RegisterTenan
 			user.ID,
 			tenantID,
 			user.Email,
-			"admin",
+			role.TenantRoleAdmin,
 			deviceID,
 		)
 		if err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/zhaojiewen/open-station/internal/application/service"
 	"github.com/zhaojiewen/open-station/internal/domain/entity"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/auth"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/proxy"
 	"github.com/zhaojiewen/open-station/pkg/logger"
@@ -229,7 +230,7 @@ func (h *AnthropicHandler) Messages(c *gin.Context) {
 	)
 
 	// 3. 权限检查
-	if !h.authService.CheckPermission(key, "chat") {
+	if !h.authService.CheckPermission(key, role.PermChat) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"type":  "error",
 			"error": gin.H{

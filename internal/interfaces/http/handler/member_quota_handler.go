@@ -34,13 +34,6 @@ func (h *MemberQuotaHandler) ListMemberQuotas(c *gin.Context) {
 		return
 	}
 
-	// Check if user is admin
-	user := middleware.GetUser(c)
-	if user == nil || user.Role != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "admin permission required"})
-		return
-	}
-
 	quotas, err := h.memberQuotaSvc.ListMemberQuotas(c.Request.Context(), tenantID.(uuid.UUID))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -55,12 +48,6 @@ func (h *MemberQuotaHandler) CreateMemberQuota(c *gin.Context) {
 	tenantID, exists := c.Get("tenant_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant not found in context"})
-		return
-	}
-
-	userObj := middleware.GetUser(c)
-	if userObj == nil || userObj.Role != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "admin permission required"})
 		return
 	}
 

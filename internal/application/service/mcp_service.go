@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	domainrole "github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/auth"
 	"github.com/zhaojiewen/open-station/pkg/mcp"
 )
@@ -90,7 +91,7 @@ func (s *MCPService) Initialize(ctx context.Context, apiKey string, clientInfo m
 		json.Unmarshal([]byte(key.Permissions), &permissions)
 	}
 	for _, perm := range permissions {
-		if perm == "admin" || perm == "manage" {
+		if perm == domainrole.PermAdmin || perm == domainrole.PermManage {
 			role = "manager"
 			break
 		}

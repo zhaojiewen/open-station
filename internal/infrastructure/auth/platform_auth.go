@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"sync"
 	"time"
 
@@ -13,14 +14,18 @@ import (
 
 	"github.com/zhaojiewen/open-station/internal/domain/entity"
 	"github.com/zhaojiewen/open-station/internal/domain/repository"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	apperrors "github.com/zhaojiewen/open-station/pkg/errors"
 )
 
 // PlatformAuthService provides authentication for platform admins
 type PlatformAuthService struct {
-	adminRepo  repository.PlatformAdminRepository
+	adminRepo    repository.PlatformAdminRepository
+	auditLogRepo repository.AuditLogRepository
 	cache      map[uuid.UUID]*cachedPlatformAdmin // Simple in-memory cache
 	cacheMutex sync.RWMutex
+	sessionTokens map[string]uuid.UUID
+	sessionMutex  sync.RWMutex
 }
 
 type cachedPlatformAdmin struct {
@@ -30,10 +35,12 @@ type cachedPlatformAdmin struct {
 }
 
 // NewPlatformAuthService creates a new platform auth service
-func NewPlatformAuthService(adminRepo repository.PlatformAdminRepository) *PlatformAuthService {
+func NewPlatformAuthService(adminRepo repository.PlatformAdminRepository, auditLogRepo repository.AuditLogRepository) *PlatformAuthService {
 	return &PlatformAuthService{
-		adminRepo: adminRepo,
-		cache:     make(map[uuid.UUID]*cachedPlatformAdmin),
+		adminRepo:     adminRepo,
+		auditLogRepo:  auditLogRepo,
+		cache:         make(map[uuid.UUID]*cachedPlatformAdmin),
+		sessionTokens: make(map[string]uuid.UUID),
 	}
 }
 
@@ -58,6 +65,11 @@ func (s *PlatformAuthService) Login(ctx context.Context, email, password string)
 	if err != nil {
 		return nil, "", apperrors.ErrInternal
 	}
+
+	// Store session token mapping
+	s.sessionMutex.Lock()
+	s.sessionTokens[token] = admin.ID
+	s.sessionMutex.Unlock()
 
 	// Update last login
 	s.adminRepo.UpdateLastLogin(ctx, admin.ID)
@@ -92,6 +104,24 @@ func (s *PlatformAuthService) ValidateSession(ctx context.Context, adminID uuid.
 	return admin, nil
 }
 
+// ValidateToken validates a session token and returns the platform admin.
+func (s *PlatformAuthService) ValidateToken(ctx context.Context, token string) (*entity.PlatformAdmin, error) {
+	s.sessionMutex.RLock()
+	adminID, ok := s.sessionTokens[token]
+	s.sessionMutex.RUnlock()
+	if !ok {
+		return nil, apperrors.ErrUnauthorized
+	}
+	return s.ValidateSession(ctx, adminID)
+}
+
+// Logout invalidates a session token.
+func (s *PlatformAuthService) Logout(token string) {
+	s.sessionMutex.Lock()
+	delete(s.sessionTokens, token)
+	s.sessionMutex.Unlock()
+}
+
 // CheckPermission checks if a platform admin has a specific permission
 func (s *PlatformAuthService) CheckPermission(ctx context.Context, adminID uuid.UUID, permission string) (bool, error) {
 	// Check cache first
@@ -121,11 +151,15 @@ func (s *PlatformAuthService) HasRole(ctx context.Context, adminID uuid.UUID, ro
 
 // IsSuperAdmin checks if admin is super admin
 func (s *PlatformAuthService) IsSuperAdmin(ctx context.Context, adminID uuid.UUID) (bool, error) {
-	return s.HasRole(ctx, adminID, "super_admin")
+	return s.HasRole(ctx, adminID, role.PlatformRoleSuperAdmin)
 }
 
 // CreateAdmin creates a new platform admin
-func (s *PlatformAuthService) CreateAdmin(ctx context.Context, email, password, name, role string, permissions []string) (*entity.PlatformAdmin, error) {
+func (s *PlatformAuthService) CreateAdmin(ctx context.Context, actorID uuid.UUID, email, password, name, adminRole string, permissions []string) (*entity.PlatformAdmin, error) {
+	if !role.IsValidPlatformRole(adminRole) {
+		return nil, apperrors.ErrInvalidPlatformRole
+	}
+
 	// Check if email already exists
 	existing, err := s.adminRepo.GetByEmail(ctx, email)
 	if err == nil && existing != nil {
@@ -138,7 +172,12 @@ func (s *PlatformAuthService) CreateAdmin(ctx context.Context, email, password, 
 		return nil, apperrors.ErrInternal
 	}
 
-	// Serialize permissions
+	// Serialize permissions (use defaults from PlatformRolePermissions if none provided)
+	if len(permissions) == 0 {
+		if defaults, ok := role.PlatformRolePermissions[adminRole]; ok {
+			permissions = defaults
+		}
+	}
 	permsJSON, err := json.Marshal(permissions)
 	if err != nil {
 		return nil, apperrors.ErrInternal
@@ -148,7 +187,7 @@ func (s *PlatformAuthService) CreateAdmin(ctx context.Context, email, password, 
 		Email:        email,
 		PasswordHash: string(passwordHash),
 		Name:         name,
-		Role:         role,
+		Role:         adminRole,
 		Permissions:  string(permsJSON),
 		Status:       "active",
 	}
@@ -157,24 +196,53 @@ func (s *PlatformAuthService) CreateAdmin(ctx context.Context, email, password, 
 		return nil, err
 	}
 
+	s.auditLog(ctx, entity.AuditLog{
+		UserID:       actorID,
+		Action:       "platform_admin_created",
+		ResourceType: "platform_admin",
+		ResourceID:   admin.ID,
+		NewValues:    toJSON(map[string]interface{}{"email": email, "name": name, "role": adminRole}),
+	})
+
 	return admin, nil
 }
 
 // UpdateAdmin updates a platform admin
-func (s *PlatformAuthService) UpdateAdmin(ctx context.Context, adminID uuid.UUID, updates map[string]interface{}) error {
+func (s *PlatformAuthService) UpdateAdmin(ctx context.Context, actorID uuid.UUID, adminID uuid.UUID, updates map[string]interface{}) error {
 	admin, err := s.adminRepo.GetByID(ctx, adminID)
 	if err != nil {
 		return apperrors.ErrPlatformAdminNotFound
+	}
+
+	oldValues := map[string]interface{}{
+		"name":        admin.Name,
+		"role":        admin.Role,
+		"status":      admin.Status,
+		"permissions": admin.Permissions,
 	}
 
 	// Apply updates
 	if name, ok := updates["name"].(string); ok {
 		admin.Name = name
 	}
-	if role, ok := updates["role"].(string); ok {
-		admin.Role = role
+	if newRole, ok := updates["role"].(string); ok {
+		if !role.IsValidPlatformRole(newRole) {
+			return apperrors.ErrInvalidPlatformRole
+		}
+		// Prevent self-demotion of last super admin
+		if role.IsSuperAdmin(admin.Role) && !role.IsSuperAdmin(newRole) {
+			count, err := s.superAdminCount(ctx)
+			if err == nil && count <= 1 {
+				return apperrors.ErrCannotDemoteLastSuperAdmin
+			}
+		}
+		admin.Role = newRole
 	}
 	if status, ok := updates["status"].(string); ok {
+		// Prevent self-status-change to inactive/suspended
+		if actorID == adminID && (status == "inactive" || status == "suspended") {
+			return apperrors.ErrCannotDeleteSelf
+		}
 		admin.Status = status
 	}
 	if permissions, ok := updates["permissions"].([]string); ok {
@@ -192,15 +260,57 @@ func (s *PlatformAuthService) UpdateAdmin(ctx context.Context, adminID uuid.UUID
 	// Invalidate cache
 	s.invalidateCache(adminID)
 
-	return s.adminRepo.Update(ctx, admin)
+	if err := s.adminRepo.Update(ctx, admin); err != nil {
+		return err
+	}
+
+	s.auditLog(ctx, entity.AuditLog{
+		UserID:       actorID,
+		Action:       "platform_admin_updated",
+		ResourceType: "platform_admin",
+		ResourceID:   adminID,
+		OldValues:    toJSON(oldValues),
+		NewValues:    toJSON(updates),
+	})
+
+	return nil
 }
 
 // DeleteAdmin deletes a platform admin
-func (s *PlatformAuthService) DeleteAdmin(ctx context.Context, adminID uuid.UUID) error {
+func (s *PlatformAuthService) DeleteAdmin(ctx context.Context, actorID uuid.UUID, adminID uuid.UUID) error {
+	if actorID == adminID {
+		return apperrors.ErrCannotDeleteSelf
+	}
+
+	admin, err := s.adminRepo.GetByID(ctx, adminID)
+	if err != nil {
+		return apperrors.ErrPlatformAdminNotFound
+	}
+
+	// Prevent deletion of last super admin
+	if role.IsSuperAdmin(admin.Role) {
+		count, err := s.superAdminCount(ctx)
+		if err == nil && count <= 1 {
+			return apperrors.ErrCannotDeleteLastSuperAdmin
+		}
+	}
+
 	// Invalidate cache
 	s.invalidateCache(adminID)
 
-	return s.adminRepo.Delete(ctx, adminID)
+	if err := s.adminRepo.Delete(ctx, adminID); err != nil {
+		return err
+	}
+
+	s.auditLog(ctx, entity.AuditLog{
+		UserID:       actorID,
+		Action:       "platform_admin_deleted",
+		ResourceType: "platform_admin",
+		ResourceID:   adminID,
+		OldValues:    toJSON(map[string]interface{}{"email": admin.Email, "name": admin.Name, "role": admin.Role}),
+	})
+
+	return nil
 }
 
 // ListAdmins lists all platform admins
@@ -236,6 +346,39 @@ func (s *PlatformAuthService) invalidateCache(id uuid.UUID) {
 	s.cacheMutex.Lock()
 	delete(s.cache, id)
 	s.cacheMutex.Unlock()
+}
+
+func (s *PlatformAuthService) superAdminCount(ctx context.Context) (int, error) {
+	admins, _, err := s.adminRepo.List(ctx, 1, 1000)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, a := range admins {
+		if role.IsSuperAdmin(a.Role) && a.Status == "active" {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (s *PlatformAuthService) auditLog(ctx context.Context, entry entity.AuditLog) {
+	go func() {
+		if s.auditLogRepo == nil {
+			return
+		}
+		if err := s.auditLogRepo.Create(context.Background(), &entry); err != nil {
+			log.Printf("platform_admin: failed to write audit log: %v", err)
+		}
+	}()
+}
+
+func toJSON(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 func generateSessionToken() (string, error) {

@@ -39,6 +39,7 @@ type Router struct {
 	platformMiddleware  gin.HandlerFunc
 	jwtAuthMiddleware   gin.HandlerFunc
 	rateLimitMiddleware gin.HandlerFunc
+	loginRateLimitMiddleware gin.HandlerFunc
 	safeMiddleware      gin.HandlerFunc
 	loggingMiddleware   gin.HandlerFunc
 	recoveryMiddleware  gin.HandlerFunc
@@ -74,6 +75,7 @@ func NewRouter(
 	platformMiddleware gin.HandlerFunc,
 	rateLimitMiddleware gin.HandlerFunc,
 	safeMiddleware gin.HandlerFunc,
+loginRateLimitMiddleware gin.HandlerFunc,
 ) *Router {
 	r := &Router{
 		engine: gin.New(),
@@ -90,6 +92,7 @@ func NewRouter(
 		platformMiddleware: platformMiddleware,
 		rateLimitMiddleware: rateLimitMiddleware,
 		safeMiddleware: safeMiddleware,
+			loginRateLimitMiddleware: loginRateLimitMiddleware,
 		loggingMiddleware: middleware.LoggingMiddleware(),
 		recoveryMiddleware: middleware.RecoveryMiddleware(),
 		securityHeadersMiddleware: middleware.SecurityHeaders(),
@@ -161,6 +164,9 @@ func (r *Router) setupRoutes() {
 	// Auth routes (public - no authentication required)
 	if r.authHandler != nil {
 		authPublic := r.engine.Group("/auth")
+			if r.loginRateLimitMiddleware != nil {
+				authPublic.Use(r.loginRateLimitMiddleware)
+			}
 		{
 			authPublic.POST("/login", r.authHandler.Login)
 			authPublic.POST("/register", r.authHandler.Register)
@@ -313,10 +319,17 @@ func (r *Router) setupRoutes() {
 	{
 		user.GET("/profile", r.userHandler.GetProfile)
 		user.GET("/api-keys", r.apiKeyHandler.ListMyAPIKeys)
-		user.POST("/api-keys", r.apiKeyHandler.CreateMyAPIKey)
 		user.GET("/usage", func(c *gin.Context) {
 			c.JSON(200, gin.H{"message": "usage endpoint - to be implemented"})
 		})
+	}
+
+	// API key write operations require non-viewer role
+	apiKeyWrite := r.engine.Group("/user")
+	apiKeyWrite.Use(r.authMiddleware)
+	apiKeyWrite.Use(middleware.RequireTenantWrite())
+	{
+		apiKeyWrite.POST("/api-keys", r.apiKeyHandler.CreateMyAPIKey)
 	}
 
 	// MCP endpoint (Model Context Protocol for Claude Code CLI)
@@ -336,22 +349,31 @@ func (r *Router) setupRoutes() {
 		adminGroup := platform.Group("")
 		adminGroup.Use(r.platformMiddleware)
 		{
+			// Read operations — any platform admin can access
 			adminGroup.GET("/admins", r.platformHandler.ListAdmins)
-			adminGroup.POST("/admins", r.platformHandler.CreateAdmin)
 			adminGroup.GET("/admins/:id", r.platformHandler.GetAdmin)
-			adminGroup.PUT("/admins/:id", r.platformHandler.UpdateAdmin)
-			adminGroup.DELETE("/admins/:id", r.platformHandler.DeleteAdmin)
-
-			// Tenant application management
 			adminGroup.GET("/applications", r.platformHandler.ListApplications)
 			adminGroup.GET("/applications/:id", r.platformHandler.GetApplication)
-			adminGroup.POST("/applications/:id/approve", r.platformHandler.ApproveApplication)
-			adminGroup.POST("/applications/:id/reject", r.platformHandler.RejectApplication)
-
-			// Tenant management
 			adminGroup.GET("/tenants", r.platformHandler.ListTenants)
-			adminGroup.PUT("/tenants/:id/suspend", r.platformHandler.SuspendTenant)
-			adminGroup.PUT("/tenants/:id/activate", r.platformHandler.ActivateTenant)
+
+			// Super admin only — admin CRUD
+			superGroup := adminGroup.Group("")
+			superGroup.Use(middleware.SuperAdminMiddleware())
+			{
+				superGroup.POST("/admins", r.platformHandler.CreateAdmin)
+				superGroup.PUT("/admins/:id", r.platformHandler.UpdateAdmin)
+				superGroup.DELETE("/admins/:id", r.platformHandler.DeleteAdmin)
+			}
+
+			// Billing write — billing_admin and super_admin can approve/manage
+			billingGroup := adminGroup.Group("")
+			billingGroup.Use(middleware.PlatformPermissionMiddleware("billing:write"))
+			{
+				billingGroup.POST("/applications/:id/approve", r.platformHandler.ApproveApplication)
+				billingGroup.POST("/applications/:id/reject", r.platformHandler.RejectApplication)
+				billingGroup.PUT("/tenants/:id/suspend", r.platformHandler.SuspendTenant)
+				billingGroup.PUT("/tenants/:id/activate", r.platformHandler.ActivateTenant)
+			}
 		}
 	}
 
@@ -410,12 +432,19 @@ func (r *Router) setupRoutes() {
 	platformCredit := r.engine.Group("/platform")
 	platformCredit.Use(r.platformMiddleware)
 	{
+		// Read operations
 		platformCredit.GET("/credit-applications", r.creditAppHandler.ListApplications)
 		platformCredit.GET("/credit-applications/pending-count", r.creditAppHandler.GetPendingCount)
 		platformCredit.GET("/credit-applications/:id", r.creditAppHandler.GetApplicationDetail)
-		platformCredit.POST("/credit-applications/:id/review", r.creditAppHandler.ReviewApplication)
-		platformCredit.PUT("/tenants/:id/credit", r.creditAppHandler.AdjustCreditLimit)
 		platformCredit.GET("/member-quotas", r.memberQuotaHandler.ListAllMemberQuotas)
+
+		// Write operations — require billing:write
+		creditWrite := platformCredit.Group("")
+		creditWrite.Use(middleware.PlatformPermissionMiddleware("billing:write"))
+		{
+			creditWrite.POST("/credit-applications/:id/review", r.creditAppHandler.ReviewApplication)
+			creditWrite.PUT("/tenants/:id/credit", r.creditAppHandler.AdjustCreditLimit)
+		}
 	}
 
 	// Payment routes - User level (individual mode)
@@ -469,7 +498,7 @@ func (r *Router) setupRoutes() {
 		platformSettlement.Use(r.platformMiddleware)
 		{
 			platformSettlement.GET("/overdue", r.settlementHandler.CheckOverdue)
-			platformSettlement.POST("/run", r.settlementHandler.RunScheduledSettlement)
+			platformSettlement.POST("/run", middleware.PlatformPermissionMiddleware("billing:write"), r.settlementHandler.RunScheduledSettlement)
 		}
 	}
 }

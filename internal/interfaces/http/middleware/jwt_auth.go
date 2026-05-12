@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/zhaojiewen/open-station/internal/domain/entity"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/auth"
 	apperrors "github.com/zhaojiewen/open-station/pkg/errors"
 )
@@ -134,7 +135,7 @@ func RequireRole(allowedRoles ...string) gin.HandlerFunc {
 
 // RequireAdmin 要求管理员角色
 func RequireAdmin() gin.HandlerFunc {
-	return RequireRole("admin")
+	return RequireRole(role.TenantRoleAdmin)
 }
 
 // RequireTenantMember 要求是该租户成员
@@ -149,6 +150,38 @@ func RequireTenantMember() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// RequireTenantWrite blocks viewer-only users from write operations.
+// Checks UserTenant.Role first (JWT auth), then falls back to user.Role (API key auth).
+func RequireTenantWrite() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		effectiveRole := ""
+
+		if ut := GetUserTenant(c); ut != nil {
+			effectiveRole = ut.Role
+		} else if u := GetUserFromAuth(c); u != nil {
+			effectiveRole = u.Role
+		}
+
+		if role.IsTenantViewer(effectiveRole) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "viewer role cannot perform this operation"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// GetUserFromAuth retrieves user from either API key auth or JWT auth context.
+func GetUserFromAuth(c *gin.Context) *entity.User {
+	if user, exists := c.Get("user"); exists {
+		if u, ok := user.(*entity.User); ok {
+			return u
+		}
+	}
+	return nil
 }
 
 // extractToken 从请求中提取token

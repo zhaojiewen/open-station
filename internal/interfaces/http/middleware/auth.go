@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/zhaojiewen/open-station/internal/domain/entity"
+	"github.com/zhaojiewen/open-station/internal/domain/role"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/auth"
 	ratelimit "github.com/zhaojiewen/open-station/internal/infrastructure/persistence/redis"
 	"github.com/zhaojiewen/open-station/pkg/config"
@@ -84,8 +85,8 @@ func AuthMiddleware(authService *auth.AuthService, safeService *ratelimit.SafeSe
 
 func AdminOnlyMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userObj, exists := c.Get("user")
-		if !exists {
+		user := GetUser(c)
+		if user == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error":   apperrors.ErrUnauthorized.Code,
 				"message": apperrors.ErrUnauthorized.Message,
@@ -94,8 +95,14 @@ func AdminOnlyMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		user := userObj.(*entity.User)
-		if user.Role != "admin" {
+		// Check UserTenant.Role first (multi-tenant JWT auth path),
+		// then fall back to user.Role (API key auth path).
+		effectiveRole := user.Role
+		if ut := GetUserTenant(c); ut != nil {
+			effectiveRole = ut.Role
+		}
+
+		if !role.IsTenantAdmin(effectiveRole) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"error":   apperrors.ErrForbidden.Code,
 				"message": apperrors.ErrForbidden.Message,
@@ -104,6 +111,35 @@ func AdminOnlyMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		tenantID := GetTenantID(c)
+		if user.TenantID != tenantID {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":   apperrors.ErrForbidden.Code,
+				"message": apperrors.ErrForbidden.Message,
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// LoginRateLimitMiddleware applies IP-based rate limiting to login/register endpoints.
+func LoginRateLimitMiddleware(safeService *ratelimit.SafeService, rps, burst int) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if safeService == nil {
+			c.Next()
+			return
+		}
+		if err := safeService.CheckIPRateLimit(c.Request.Context(), c.ClientIP(), rps, burst); err != nil {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":   "too many requests",
+				"message": "please try again later",
+			})
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }
@@ -129,7 +165,10 @@ func GetAPIKey(c *gin.Context) *entity.APIKey {
 }
 
 func GetUser(c *gin.Context) *entity.User {
-	user, _ := c.Get("user")
+	user, exists := c.Get("user")
+	if !exists || user == nil {
+		return nil
+	}
 	return user.(*entity.User)
 }
 

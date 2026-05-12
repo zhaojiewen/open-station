@@ -1065,3 +1065,113 @@ func TestOptionalJWTAuth_ValidateError(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 }
+
+func TestRequireTenantWrite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		setupCtx   func(c *gin.Context)
+		wantAbort  bool
+		wantStatus int
+	}{
+		{
+			name: "admin via UserTenant passes",
+			setupCtx: func(c *gin.Context) {
+				c.Set("user_tenant", &entity.UserTenant{Role: "admin"})
+			},
+			wantAbort:  false,
+			wantStatus: 200,
+		},
+		{
+			name: "member via UserTenant passes",
+			setupCtx: func(c *gin.Context) {
+				c.Set("user_tenant", &entity.UserTenant{Role: "member"})
+			},
+			wantAbort:  false,
+			wantStatus: 200,
+		},
+		{
+			name: "viewer via UserTenant blocked",
+			setupCtx: func(c *gin.Context) {
+				c.Set("user_tenant", &entity.UserTenant{Role: "viewer"})
+			},
+			wantAbort:  true,
+			wantStatus: 403,
+		},
+		{
+			name: "viewer via user.Role blocked (API key auth fallback)",
+			setupCtx: func(c *gin.Context) {
+				c.Set("user", &entity.User{Role: "viewer"})
+			},
+			wantAbort:  true,
+			wantStatus: 403,
+		},
+		{
+			name: "admin via user.Role passes (API key auth fallback)",
+			setupCtx: func(c *gin.Context) {
+				c.Set("user", &entity.User{Role: "admin"})
+			},
+			wantAbort:  false,
+			wantStatus: 200,
+		},
+		{
+			name: "member via user.Role passes (API key auth fallback)",
+			setupCtx: func(c *gin.Context) {
+				c.Set("user", &entity.User{Role: "member"})
+			},
+			wantAbort:  false,
+			wantStatus: 200,
+		},
+		{
+			name:       "no user in context - no-op",
+			setupCtx:   func(c *gin.Context) {},
+			wantAbort:  false,
+			wantStatus: 200,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			tt.setupCtx(c)
+
+			middleware := RequireTenantWrite()
+			middleware(c)
+
+			if c.IsAborted() != tt.wantAbort {
+				t.Errorf("IsAborted = %v, want %v", c.IsAborted(), tt.wantAbort)
+			}
+			if w.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", w.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestGetUserFromAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("user from context", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		expected := &entity.User{ID: uuid.New(), Role: "admin"}
+		c.Set("user", expected)
+
+		got := GetUserFromAuth(c)
+		if got == nil {
+			t.Fatal("GetUserFromAuth should not return nil")
+		}
+		if got.ID != expected.ID {
+			t.Errorf("ID = %v, want %v", got.ID, expected.ID)
+		}
+	})
+
+	t.Run("no user in context returns nil", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		got := GetUserFromAuth(c)
+		if got != nil {
+			t.Error("GetUserFromAuth should return nil")
+		}
+	})
+}

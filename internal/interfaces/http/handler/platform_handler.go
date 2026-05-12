@@ -98,8 +98,11 @@ func (h *PlatformHandler) CreateAdmin(c *gin.Context) {
 		return
 	}
 
+	actorID := middleware.GetPlatformAdminID(c)
+
 	admin, err := h.platformAuth.CreateAdmin(
 		c.Request.Context(),
+		actorID,
 		req.Email,
 		req.Password,
 		req.Name,
@@ -147,7 +150,9 @@ func (h *PlatformHandler) UpdateAdmin(c *gin.Context) {
 		return
 	}
 
-	if err := h.platformAuth.UpdateAdmin(c.Request.Context(), id, req); err != nil {
+	actorID := middleware.GetPlatformAdminID(c)
+
+	if err := h.platformAuth.UpdateAdmin(c.Request.Context(), actorID, id, req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -164,7 +169,9 @@ func (h *PlatformHandler) DeleteAdmin(c *gin.Context) {
 		return
 	}
 
-	if err := h.platformAuth.DeleteAdmin(c.Request.Context(), id); err != nil {
+	actorID := middleware.GetPlatformAdminID(c)
+
+	if err := h.platformAuth.DeleteAdmin(c.Request.Context(), actorID, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
