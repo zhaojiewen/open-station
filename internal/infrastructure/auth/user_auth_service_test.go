@@ -97,6 +97,15 @@ func (m *mockUserRepo) GetBudgetUsage(ctx context.Context, id uuid.UUID) (monthl
 func (m *mockUserRepo) IncrementTokensUsed(ctx context.Context, id uuid.UUID, tokens int64) error { return nil }
 func (m *mockUserRepo) IncrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
 func (m *mockUserRepo) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *mockUserRepo) GetBalance(ctx context.Context, id uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Zero, nil
+}
+func (m *mockUserRepo) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
+func (m *mockUserRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
 
 type mockTenantRepo struct {
 	tenants map[uuid.UUID]*entity.Tenant

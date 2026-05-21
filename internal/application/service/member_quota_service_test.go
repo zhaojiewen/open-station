@@ -272,6 +272,15 @@ func (m *MockMQUserRepo) IncrementTokensUsed(ctx context.Context, id uuid.UUID, 
 }
 func (m *MockMQUserRepo) IncrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error  { return nil }
 func (m *MockMQUserRepo) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error  { return nil }
+func (m *MockMQUserRepo) GetBalance(ctx context.Context, id uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Zero, nil
+}
+func (m *MockMQUserRepo) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
+func (m *MockMQUserRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
 
 var _ repository.UserRepository = (*MockMQUserRepo)(nil)
 

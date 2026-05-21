@@ -32,11 +32,6 @@ func (s *MCPService) getUserTools() []mcp.Tool {
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
 	}
 
-	// Add plugin user tools if plugin service is available
-	if s.pluginService != nil {
-		tools = append(tools, getPluginUserTools()...)
-	}
-
 	return tools
 }
 
@@ -103,7 +98,7 @@ func (s *MCPService) getManagerTools() []mcp.Tool {
 			}}},
 		{Name: "create_provider_account", Title: "Create Provider Account", Description: "Add provider API account",
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-				"provider":     map[string]interface{}{"type": "string", "description": "Provider: openai, anthropic, gemini, deepseek, glm"},
+				"provider":     map[string]interface{}{"type": "string", "description": "Provider: openai, anthropic, deepseek, glm"},
 				"name":         map[string]interface{}{"type": "string", "description": "Account name"},
 				"api_key":      map[string]interface{}{"type": "string", "description": "API key"},
 				"base_url":     map[string]interface{}{"type": "string", "description": "Base URL (optional)"},
@@ -140,11 +135,6 @@ func (s *MCPService) getManagerTools() []mcp.Tool {
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"provider": map[string]interface{}{"type": "string", "description": "Provider name (optional)"},
 			}}},
-	}
-
-	// Add plugin manager tools if plugin service is available
-	if s.pluginService != nil {
-		tools = append(tools, getPluginManagerTools()...)
 	}
 
 	// Add budget alert tools if budget alert service is available

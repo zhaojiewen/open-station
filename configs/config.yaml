@@ -30,23 +30,19 @@ redis:
 
 providers:
   openai:
-    base_url: https://api.openai.com/v1
+    base_url: https://api.openai.com/
     api_key: ${OPENAI_API_KEY}
     timeout: 120s
   claude:
-    base_url: https://api.anthropic.com/v1
+    base_url: https://api.anthropic.com/
     api_key: ${ANTHROPIC_API_KEY}
     timeout: 120s
-  gemini:
-    base_url: https://generativelanguage.googleapis.com/v1beta
-    api_key: ${GEMINI_API_KEY}
-    timeout: 120s
   deepseek:
-    base_url: https://api.deepseek.com/v1
+    base_url: https://api.deepseek.com/
     api_key: ${DEEPSEEK_API_KEY}
     timeout: 120s
   glm:
-    base_url: https://open.bigmodel.cn/api/paas/v4
+    base_url: https://open.bigmodel.cn/api/
     api_key: ${GLM_API_KEY}
     timeout: 120s
 

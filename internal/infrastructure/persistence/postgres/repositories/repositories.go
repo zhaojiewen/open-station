@@ -288,6 +288,34 @@ func (r *UserRepoImpl) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID)
 		Update("active_api_keys", gorm.Expr("active_api_keys - 1")).Error
 }
 
+func (r *UserRepoImpl) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return r.db.WithContext(ctx).Model(&entity.User{}).
+		Where("id = ?", id).
+		Update("balance", gorm.Expr("balance + ?", amount)).Error
+}
+
+func (r *UserRepoImpl) GetBalance(ctx context.Context, id uuid.UUID) (decimal.Decimal, error) {
+	var user entity.User
+	err := r.db.WithContext(ctx).Select("balance").Where("id = ?", id).First(&user).Error
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return user.Balance, nil
+}
+
+func (r *UserRepoImpl) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	result := r.db.WithContext(ctx).Model(&entity.User{}).
+		Where("id = ? AND balance >= ?", id, amount).
+		Update("balance", gorm.Expr("balance - ?", amount))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("insufficient balance or user not found")
+	}
+	return nil
+}
+
 type APIKeyRepoImpl struct {
 	db *gorm.DB
 }
@@ -466,6 +494,35 @@ func (r *APIKeyRepoImpl) ResetDailyTokens(ctx context.Context, id uuid.UUID) err
 	return r.db.WithContext(ctx).Model(&entity.APIKey{}).
 		Where("id = ?", id).
 		Update("tokens_used_today", 0).Error
+}
+
+// UpdateProviderUsage updates per-provider token and cost usage for an API key.
+// Also updates the aggregated total counters.
+func (r *APIKeyRepoImpl) UpdateProviderUsage(ctx context.Context, id uuid.UUID, provider string, tokens int64, cost decimal.Decimal) error {
+	var apiKey entity.APIKey
+	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&apiKey).Error; err != nil {
+		return err
+	}
+
+	if apiKey.ProviderUsage == nil {
+		usage := make(entity.ProviderUsage)
+		apiKey.ProviderUsage = &usage
+	}
+	stats := apiKey.ProviderUsage.EnsureProvider(provider)
+	stats.UsedTokensThisMonth += tokens
+	stats.TokensUsedToday += tokens
+	stats.MonthlyCostUsed = stats.MonthlyCostUsed.Add(cost)
+	stats.DailyCostUsed = stats.DailyCostUsed.Add(cost)
+
+	return r.db.WithContext(ctx).Model(&apiKey).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"provider_usage":        apiKey.ProviderUsage,
+			"used_tokens_this_month": gorm.Expr("used_tokens_this_month + ?", tokens),
+			"tokens_used_today":      gorm.Expr("tokens_used_today + ?", tokens),
+			"monthly_cost_used":      gorm.Expr("monthly_cost_used + ?", cost),
+			"daily_cost_used":        gorm.Expr("daily_cost_used + ?", cost),
+		}).Error
 }
 
 func (r *APIKeyRepoImpl) ListByTenant(ctx context.Context, tenantID uuid.UUID, status string) ([]entity.APIKey, error) {
@@ -1067,256 +1124,69 @@ func (r *ProviderAccountRepoImpl) UpdateStatus(ctx context.Context, id uuid.UUID
 		Where("id = ?", id).
 		Updates(updates).Error
 }
-	// PluginRepoImpl implements PluginRepository
-	type PluginRepoImpl struct {
-		db *gorm.DB
-	}
 
-	// NewPluginRepository creates a new plugin repository
-	func NewPluginRepository(db *gorm.DB) *PluginRepoImpl {
-		return &PluginRepoImpl{db: db}
-	}
-
-	// Create creates a new plugin
-	func (r *PluginRepoImpl) Create(ctx context.Context, plugin *entity.Plugin) error {
-		return r.db.WithContext(ctx).Create(plugin).Error
-	}
-
-	// GetByID retrieves a plugin by its UUID
-	func (r *PluginRepoImpl) GetByID(ctx context.Context, id uuid.UUID) (*entity.Plugin, error) {
-		var plugin entity.Plugin
-		err := r.db.WithContext(ctx).Where("id = ?", id).First(&plugin).Error
+	// Dedicated account queries
+	func (r *ProviderAccountRepoImpl) GetDedicatedByTenant(ctx context.Context, tenantID uuid.UUID, provider string) (*entity.ProviderAccount, error) {
+		var account entity.ProviderAccount
+		err := r.db.WithContext(ctx).
+			Where("tenant_id = ? AND provider = ? AND status = ?", tenantID, provider, "active").
+			Order("priority ASC").
+			First(&account).Error
 		if err != nil {
 			return nil, err
 		}
-		return &plugin, nil
+		return &account, nil
 	}
 
-	// GetByPluginID retrieves a plugin by its string ID
-	func (r *PluginRepoImpl) GetByPluginID(ctx context.Context, pluginID string) (*entity.Plugin, error) {
-		var plugin entity.Plugin
-		err := r.db.WithContext(ctx).Where("plugin_id = ?", pluginID).First(&plugin).Error
+	func (r *ProviderAccountRepoImpl) GetDedicatedByUser(ctx context.Context, userID uuid.UUID, provider string) (*entity.ProviderAccount, error) {
+		var account entity.ProviderAccount
+		err := r.db.WithContext(ctx).
+			Where("user_id = ? AND provider = ? AND status = ?", userID, provider, "active").
+			Order("priority ASC").
+			First(&account).Error
 		if err != nil {
 			return nil, err
 		}
-		return &plugin, nil
+		return &account, nil
 	}
 
-	// GetByProvider retrieves a plugin by provider name
-	func (r *PluginRepoImpl) GetByProvider(ctx context.Context, provider string) (*entity.Plugin, error) {
-		var plugin entity.Plugin
-		err := r.db.WithContext(ctx).Where("provider = ?", provider).First(&plugin).Error
-		if err != nil {
-			return nil, err
-		}
-		return &plugin, nil
+	func (r *ProviderAccountRepoImpl) ListDedicatedByTenant(ctx context.Context, tenantID uuid.UUID) ([]entity.ProviderAccount, error) {
+		var accounts []entity.ProviderAccount
+		err := r.db.WithContext(ctx).
+			Where("tenant_id = ? AND status = ?", tenantID, "active").
+			Order("provider ASC, priority ASC").
+			Find(&accounts).Error
+		return accounts, err
 	}
 
-	// Update updates a plugin
-	func (r *PluginRepoImpl) Update(ctx context.Context, plugin *entity.Plugin) error {
-		return r.db.WithContext(ctx).Save(plugin).Error
+	func (r *ProviderAccountRepoImpl) ListDedicatedByUser(ctx context.Context, userID uuid.UUID) ([]entity.ProviderAccount, error) {
+		var accounts []entity.ProviderAccount
+		err := r.db.WithContext(ctx).
+			Where("user_id = ? AND status = ?", userID, "active").
+			Order("provider ASC, priority ASC").
+			Find(&accounts).Error
+		return accounts, err
 	}
 
-	// Delete removes a plugin
-	func (r *PluginRepoImpl) Delete(ctx context.Context, id uuid.UUID) error {
-		return r.db.WithContext(ctx).Delete(&entity.Plugin{}, id).Error
+	func (r *ProviderAccountRepoImpl) ListPublicByProvider(ctx context.Context, provider string) ([]entity.ProviderAccount, error) {
+		var accounts []entity.ProviderAccount
+		err := r.db.WithContext(ctx).
+			Where("tenant_id IS NULL AND user_id IS NULL AND provider = ? AND status = ?", provider, "active").
+			Order("priority ASC").
+			Find(&accounts).Error
+		return accounts, err
 	}
 
-	// List returns all plugins with pagination
-	func (r *PluginRepoImpl) List(ctx context.Context, page, pageSize int) ([]entity.Plugin, int64, error) {
-		var plugins []entity.Plugin
-		var total int64
-
-		offset := (page - 1) * pageSize
-
-		err := r.db.WithContext(ctx).Model(&entity.Plugin{}).Count(&total).Error
-		if err != nil {
-			return nil, 0, err
-		}
-
-		err = r.db.WithContext(ctx).
-			Order("created_at DESC").
-			Offset(offset).
-			Limit(pageSize).
-			Find(&plugins).Error
-		if err != nil {
-			return nil, 0, err
-		}
-
-		return plugins, total, nil
+	func (r *ProviderAccountRepoImpl) UpdateUseDedicatedTenant(ctx context.Context, tenantID uuid.UUID, enabled bool) error {
+		return r.db.WithContext(ctx).Model(&entity.Tenant{}).
+			Where("id = ?", tenantID).
+			Update("use_dedicated_provider", enabled).Error
 	}
 
-	// ListByStatus returns plugins with a specific status
-	func (r *PluginRepoImpl) ListByStatus(ctx context.Context, status string) ([]entity.Plugin, error) {
-		var plugins []entity.Plugin
-		err := r.db.WithContext(ctx).Where("status = ?", status).Find(&plugins).Error
-		return plugins, err
-	}
-
-	// ListActive returns only active plugins
-	func (r *PluginRepoImpl) ListActive(ctx context.Context) ([]entity.Plugin, error) {
-		var plugins []entity.Plugin
-		err := r.db.WithContext(ctx).Where("status = ?", "active").Find(&plugins).Error
-		return plugins, err
-	}
-
-	// SetStatus updates plugin status
-	func (r *PluginRepoImpl) SetStatus(ctx context.Context, pluginID string, status string) error {
-		updates := map[string]interface{}{
-			"status":     status,
-			"updated_at": time.Now(),
-		}
-
-		if status == "inactive" {
-			updates["disabled_at"] = time.Now()
-		} else if status == "active" {
-			updates["disabled_at"] = nil
-		}
-
-		return r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Updates(updates).Error
-	}
-
-	// SetConfig updates plugin configuration
-	func (r *PluginRepoImpl) SetConfig(ctx context.Context, pluginID string, config string) error {
-		return r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Updates(map[string]interface{}{
-				"config":     config,
-				"updated_at": time.Now(),
-			}).Error
-	}
-
-	// RecordRequest increments request count
-	func (r *PluginRepoImpl) RecordRequest(ctx context.Context, pluginID string) error {
-		return r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Updates(map[string]interface{}{
-				"request_count": gorm.Expr("request_count + 1"),
-				"updated_at":    time.Now(),
-			}).Error
-	}
-
-	// RecordSuccess increments success count and updates latency
-	func (r *PluginRepoImpl) RecordSuccess(ctx context.Context, pluginID string, latencyMs int64) error {
-		return r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Updates(map[string]interface{}{
-				"success_count": gorm.Expr("success_count + 1"),
-				"updated_at":    time.Now(),
-				"health_score":  gorm.Expr("LEAST(100, health_score + 1)"),
-			}).Error
-	}
-
-	// RecordError increments error count
-	func (r *PluginRepoImpl) RecordError(ctx context.Context, pluginID string, errMsg string) error {
-		return r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Updates(map[string]interface{}{
-				"error_count":   gorm.Expr("error_count + 1"),
-				"last_error":    errMsg,
-				"last_error_at": time.Now(),
-				"updated_at":    time.Now(),
-				"health_score":  gorm.Expr("GREATEST(0, health_score - 5)"),
-			}).Error
-	}
-
-	// IncrementCost adds to total cost
-	func (r *PluginRepoImpl) IncrementCost(ctx context.Context, pluginID string, cost decimal.Decimal) error {
-		return r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Update("total_cost", gorm.Expr("total_cost + ?", cost)).Error
-	}
-
-	// GetStats returns usage statistics for a plugin
-	func (r *PluginRepoImpl) GetStats(ctx context.Context, pluginID string) (*entity.PluginStatus, error) {
-		plugin, err := r.GetByPluginID(ctx, pluginID)
-		if err != nil {
-			return nil, err
-		}
-		status := plugin.ToPluginStatus()
-		return &status, nil
-	}
-
-	// GetAllStats returns statistics for all plugins
-	func (r *PluginRepoImpl) GetAllStats(ctx context.Context) ([]entity.PluginStatus, error) {
-		plugins, _, err := r.List(ctx, 1, 1000)
-		if err != nil {
-			return nil, err
-		}
-
-		stats := make([]entity.PluginStatus, len(plugins))
-		for i, p := range plugins {
-			stats[i] = p.ToPluginStatus()
-		}
-
-		return stats, nil
-	}
-
-	// Exists checks if a plugin exists
-	func (r *PluginRepoImpl) Exists(ctx context.Context, pluginID string) bool {
-		var count int64
-		r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Count(&count)
-		return count > 0
-	}
-
-	// ProviderExists checks if a provider has a plugin
-	func (r *PluginRepoImpl) ProviderExists(ctx context.Context, provider string) bool {
-		var count int64
-		r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("provider = ?", provider).
-			Count(&count)
-		return count > 0
-	}
-
-	// GetProviders returns list of all provider names with plugins
-	func (r *PluginRepoImpl) GetProviders(ctx context.Context) ([]string, error) {
-		var providers []string
-		err := r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Distinct("provider").
-			Pluck("provider", &providers).Error
-		return providers, err
-	}
-
-	// ResetStats resets statistics for a plugin
-	func (r *PluginRepoImpl) ResetStats(ctx context.Context, pluginID string) error {
-		return r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Updates(map[string]interface{}{
-				"request_count":  0,
-				"success_count":  0,
-				"error_count":    0,
-				"total_cost":     0,
-				"last_error":     nil,
-				"last_error_at":  nil,
-				"health_score":   100,
-				"updated_at":     time.Now(),
-			}).Error
-	}
-
-	// UpdateHealthScore updates health score
-	func (r *PluginRepoImpl) UpdateHealthScore(ctx context.Context, pluginID string, score int) error {
-		return r.db.WithContext(ctx).Model(&entity.Plugin{}).
-			Where("plugin_id = ?", pluginID).
-			Update("health_score", score).Error
-	}
-
-	// HealthCheckAll returns health status for all active plugins
-	func (r *PluginRepoImpl) HealthCheckAll(ctx context.Context) (map[string]int, error) {
-		plugins, err := r.ListActive(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		healthScores := make(map[string]int)
-		for _, p := range plugins {
-			healthScores[p.PluginID] = p.HealthScore
-		}
-
-		return healthScores, nil
+	func (r *ProviderAccountRepoImpl) UpdateUseDedicatedUser(ctx context.Context, userID uuid.UUID, enabled bool) error {
+		return r.db.WithContext(ctx).Model(&entity.User{}).
+			Where("id = ?", userID).
+			Update("use_dedicated_provider", enabled).Error
 	}
 
 	// ==================== Platform Admin Repository ====================

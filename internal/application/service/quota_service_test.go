@@ -277,6 +277,9 @@ func (m *MockQuotaUserRepo) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 func (m *MockQuotaUserRepo) GetStatus(ctx context.Context, id uuid.UUID) (string, error) {
 	return "active", nil
 }
+func (m *MockQuotaUserRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
 
 // Quota-specific mock tenant repo with credit/token fields
 type MockQuotaTenantRepo struct {

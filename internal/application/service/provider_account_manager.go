@@ -76,6 +76,25 @@ func (m *ProviderAccountManager) GetLoadBalancerStats() map[string]interface{} {
 	return m.loadBalancer.GetAllStats()
 }
 
+// GetActiveAccountWithDedicated 获取活跃账户，优先使用独享账号。
+// 优先级：用户独享 > 租户独享 > 公共账号（负载均衡）
+func (m *ProviderAccountManager) GetActiveAccountWithDedicated(ctx context.Context, provider string, tenantID, userID uuid.UUID) (*entity.ProviderAccount, error) {
+	// 1. 检查用户独享账号
+	account, err := m.repo.GetDedicatedByUser(ctx, userID, provider)
+	if err == nil && account != nil && m.isAccountUsable(account) {
+		return account, nil
+	}
+
+	// 2. 检查租户独享账号
+	account, err = m.repo.GetDedicatedByTenant(ctx, tenantID, provider)
+	if err == nil && account != nil && m.isAccountUsable(account) {
+		return account, nil
+	}
+
+	// 3. 回退到公共账号
+	return m.GetActiveAccount(ctx, provider)
+}
+
 // GetActiveAccount 获取当前活跃账户（支持实时切换）
 func (m *ProviderAccountManager) GetActiveAccount(ctx context.Context, provider string) (*entity.ProviderAccount, error) {
 	// 1. 检查缓存中的账户
@@ -504,7 +523,7 @@ func containsIgnoreCase(str, substr string) bool {
 
 // RefreshCache 刷新账户缓存（用于定期更新）
 func (m *ProviderAccountManager) RefreshCache(ctx context.Context) error {
-	providers := []string{"openai", "anthropic", "gemini", "deepseek", "glm"}
+	providers := []string{"openai", "anthropic", "deepseek", "glm"}
 
 	for _, provider := range providers {
 		account, err := m.repo.GetDefaultByProvider(ctx, provider)

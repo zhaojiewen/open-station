@@ -6,55 +6,50 @@ import (
 	"github.com/zhaojiewen/open-station/internal/domain/repository"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/auth"
 	"github.com/zhaojiewen/open-station/internal/infrastructure/payment"
-	"github.com/zhaojiewen/open-station/internal/infrastructure/proxy"
 	"github.com/zhaojiewen/open-station/internal/interfaces/http/handler"
 	"github.com/zhaojiewen/open-station/internal/interfaces/http/middleware"
 	"github.com/zhaojiewen/open-station/internal/version"
 )
 
 type Router struct {
-	engine             *gin.Engine
-	proxyHandler       *handler.ProxyHandler
-	dynamicProxyHandler *handler.DynamicProxyHandler
-	providerAccountHandler *handler.ProviderAccountHandler
-	anthropicHandler   *handler.AnthropicHandler
-	mcpHandler         *handler.MCPHandler
-	billingHandler     *handler.BillingHandler
-	apiKeyHandler      *handler.APIKeyHandler
-	userHandler        *handler.UserHandler
-	pluginHandler      *handler.PluginHandler
-	platformHandler    *handler.PlatformHandler
-	tenantAppHandler   *handler.TenantApplicationHandler
-	userAppHandler     *handler.UserApplicationHandler
-	budgetAlertHandler *handler.BudgetAlertHandler
+	engine                  *gin.Engine
+	transparentProxyHandler *handler.TransparentProxyHandler
+	providerAccountHandler  *handler.ProviderAccountHandler
+	mcpHandler             *handler.MCPHandler
+	billingHandler         *handler.BillingHandler
+	apiKeyHandler          *handler.APIKeyHandler
+	userHandler            *handler.UserHandler
+	platformHandler        *handler.PlatformHandler
+	tenantAppHandler       *handler.TenantApplicationHandler
+	userAppHandler         *handler.UserApplicationHandler
+	budgetAlertHandler     *handler.BudgetAlertHandler
 	// Payment system handlers
-	creditAppHandler    *handler.CreditApplicationHandler
-	memberQuotaHandler  *handler.MemberQuotaHandler
-	paymentHandler      *handler.PaymentHandler
-	settlementHandler   *handler.SettlementHandler
+	creditAppHandler   *handler.CreditApplicationHandler
+	memberQuotaHandler *handler.MemberQuotaHandler
+	paymentHandler     *handler.PaymentHandler
+	settlementHandler  *handler.SettlementHandler
 	// Auth handlers
-	authHandler         *handler.AuthHandler
-	authMiddleware      gin.HandlerFunc
-	adminMiddleware     gin.HandlerFunc
-	platformMiddleware  gin.HandlerFunc
-	jwtAuthMiddleware   gin.HandlerFunc
-	rateLimitMiddleware gin.HandlerFunc
+	authHandler              *handler.AuthHandler
+	authMiddleware           gin.HandlerFunc
+	apiTypeAuthMiddleware    gin.HandlerFunc
+	adminMiddleware          gin.HandlerFunc
+	platformMiddleware       gin.HandlerFunc
+	jwtAuthMiddleware        gin.HandlerFunc
+	rateLimitMiddleware      gin.HandlerFunc
 	loginRateLimitMiddleware gin.HandlerFunc
-	safeMiddleware      gin.HandlerFunc
-	loggingMiddleware   gin.HandlerFunc
-	recoveryMiddleware  gin.HandlerFunc
+	safeMiddleware           gin.HandlerFunc
+	loggingMiddleware        gin.HandlerFunc
+	recoveryMiddleware       gin.HandlerFunc
 	securityHeadersMiddleware gin.HandlerFunc
 }
 
 func NewRouter(
-	proxyService *proxy.ProxyService,
-	dynamicProxyHandler *handler.DynamicProxyHandler,
+	transparentProxyHandler *handler.TransparentProxyHandler,
 	providerAccountHandler *handler.ProviderAccountHandler,
 	billingService *service.BillingService,
 	asyncBilling *service.AsyncBillingQueue,
 	authService *auth.AuthService,
 	mcpService *service.MCPService,
-	pluginService *service.PluginService,
 	platformAuth *auth.PlatformAuthService,
 	tenantAppService *service.TenantApplicationService,
 	userAppService *service.UserApplicationService,
@@ -71,30 +66,30 @@ func NewRouter(
 	tenantRepo repository.TenantRepository,
 	userRepo repository.UserRepository,
 	authMiddleware gin.HandlerFunc,
+	apiTypeAuthMiddleware gin.HandlerFunc,
 	adminMiddleware gin.HandlerFunc,
 	platformMiddleware gin.HandlerFunc,
 	rateLimitMiddleware gin.HandlerFunc,
 	safeMiddleware gin.HandlerFunc,
-loginRateLimitMiddleware gin.HandlerFunc,
+	loginRateLimitMiddleware gin.HandlerFunc,
 ) *Router {
 	r := &Router{
-		engine: gin.New(),
-		proxyHandler: handler.NewProxyHandler(proxyService, billingService, asyncBilling, authService),
-			dynamicProxyHandler: dynamicProxyHandler,
-			providerAccountHandler: providerAccountHandler,
-		anthropicHandler: handler.NewAnthropicHandler(proxyService, authService, billingService),
-		mcpHandler: handler.NewMCPHandler(mcpService),
-		billingHandler: handler.NewBillingHandler(billingService),
-		apiKeyHandler: handler.NewAPIKeyHandler(authService),
-		userHandler: handler.NewUserHandler(),
-		authMiddleware: authMiddleware,
-		adminMiddleware: adminMiddleware,
-		platformMiddleware: platformMiddleware,
-		rateLimitMiddleware: rateLimitMiddleware,
-		safeMiddleware: safeMiddleware,
-			loginRateLimitMiddleware: loginRateLimitMiddleware,
-		loggingMiddleware: middleware.LoggingMiddleware(),
-		recoveryMiddleware: middleware.RecoveryMiddleware(),
+		engine:                  gin.New(),
+		transparentProxyHandler: transparentProxyHandler,
+		providerAccountHandler:  providerAccountHandler,
+		mcpHandler:             handler.NewMCPHandler(mcpService),
+		billingHandler:         handler.NewBillingHandler(billingService),
+		apiKeyHandler:          handler.NewAPIKeyHandler(authService),
+		userHandler:            handler.NewUserHandler(),
+		authMiddleware:          authMiddleware,
+		apiTypeAuthMiddleware:   apiTypeAuthMiddleware,
+		adminMiddleware:         adminMiddleware,
+		platformMiddleware:      platformMiddleware,
+		rateLimitMiddleware:     rateLimitMiddleware,
+		safeMiddleware:          safeMiddleware,
+		loginRateLimitMiddleware: loginRateLimitMiddleware,
+		loggingMiddleware:        middleware.LoggingMiddleware(),
+		recoveryMiddleware:       middleware.RecoveryMiddleware(),
 		securityHeadersMiddleware: middleware.SecurityHeaders(),
 	}
 
@@ -102,11 +97,6 @@ loginRateLimitMiddleware gin.HandlerFunc,
 	if jwtService != nil && userAuthService != nil {
 		r.jwtAuthMiddleware = middleware.JWTAuthMiddleware(jwtService, userAuthService)
 		r.authHandler = handler.NewAuthHandler(userAuthService, jwtService)
-	}
-
-	// Plugin handler is optional - only set if plugin service is provided
-	if pluginService != nil {
-		r.pluginHandler = handler.NewPluginHandler(pluginService)
 	}
 
 	// Platform handlers - only set if platform auth is provided
@@ -164,9 +154,9 @@ func (r *Router) setupRoutes() {
 	// Auth routes (public - no authentication required)
 	if r.authHandler != nil {
 		authPublic := r.engine.Group("/auth")
-			if r.loginRateLimitMiddleware != nil {
-				authPublic.Use(r.loginRateLimitMiddleware)
-			}
+		if r.loginRateLimitMiddleware != nil {
+			authPublic.Use(r.loginRateLimitMiddleware)
+		}
 		{
 			authPublic.POST("/login", r.authHandler.Login)
 			authPublic.POST("/register", r.authHandler.Register)
@@ -189,40 +179,20 @@ func (r *Router) setupRoutes() {
 		}
 	}
 
-	v1 := r.engine.Group("/v1")
-	{
-		// Anthropic Messages API 兼容端点 (供 Claude Code CLI 使用)
-		anthropicGroup := v1.Group("")
-		anthropicGroup.Use(r.authMiddleware)
-		anthropicGroup.Use(r.rateLimitMiddleware)
-		{
-			anthropicGroup.POST("/messages", r.anthropicHandler.Messages)
-			anthropicGroup.GET("/models", r.anthropicHandler.Models)
-		}
-
-		proxyGroup := v1.Group("/proxy")
-		proxyGroup.Use(r.authMiddleware)
+	// Transparent proxy routes (API-type based): /:api/*path
+	// Examples: /gpt/v1/chat/completions, /claude/v1/messages
+	if r.transparentProxyHandler != nil {
+		proxyGroup := r.engine.Group("/:api")
+		proxyGroup.Use(r.apiTypeAuthMiddleware)
 		proxyGroup.Use(r.rateLimitMiddleware)
-		{
-			proxyGroup.POST("/chat/completions", r.dynamicProxyHandler.ChatCompletions)
-			proxyGroup.POST("/embeddings", r.proxyHandler.Embeddings)
-		}
-
-		directGroup := v1.Group("/:provider")
-		directGroup.Use(r.authMiddleware)
-		directGroup.Use(r.rateLimitMiddleware)
-		{
-			directGroup.POST("/chat/completions", r.dynamicProxyHandler.ChatCompletions)
-			directGroup.POST("/messages", r.dynamicProxyHandler.ChatCompletions)
-			directGroup.POST("/embeddings", r.proxyHandler.Embeddings)
-		}
+		proxyGroup.Any("/*path", r.transparentProxyHandler.HandleProxy)
 	}
 
 	admin := r.engine.Group("/admin")
 	admin.Use(r.authMiddleware)
 	admin.Use(r.adminMiddleware)
 	{
-		admin.GET("/billing/balance/:tenant_id", r.billingHandler.GetBalance)
+		admin.GET("/billing/balance/:user_id", r.billingHandler.GetBalance)
 		admin.POST("/billing/recharge", r.billingHandler.Recharge)
 		admin.GET("/billing/usage", r.billingHandler.GetUsage)
 		admin.GET("/billing/bills", r.billingHandler.GetBills)
@@ -241,7 +211,6 @@ func (r *Router) setupRoutes() {
 		admin.GET("/users", func(c *gin.Context) {
 			c.JSON(200, gin.H{"message": "users endpoint - to be implemented"})
 		})
-		// admin.POST("/users") - implemented below via userAppHandler.AdminCreateUser
 		admin.GET("/users/:id", func(c *gin.Context) {
 			c.JSON(200, gin.H{"message": "user endpoint - to be implemented"})
 		})
@@ -262,56 +231,47 @@ func (r *Router) setupRoutes() {
 			c.JSON(200, gin.H{"message": "tenant endpoint - to be implemented"})
 		})
 
-			// Plugin management routes
-			admin.GET("/plugins", r.pluginHandler.List)
-			admin.GET("/plugins/available", r.pluginHandler.ListAvailable)
-			admin.GET("/plugins/search", r.pluginHandler.Search)
-			admin.GET("/plugins/providers", r.pluginHandler.GetProviders)
-			admin.GET("/plugins/stats", r.pluginHandler.GetAllStats)
-			admin.GET("/plugins/capability/:capability", r.pluginHandler.ByCapability)
-			admin.GET("/plugins/:id", r.pluginHandler.Get)
-			admin.POST("/plugins/:id/install", r.pluginHandler.Install)
-			admin.PUT("/plugins/:id/configure", r.pluginHandler.Configure)
-			admin.POST("/plugins/:id/activate", r.pluginHandler.Activate)
-			admin.POST("/plugins/:id/deactivate", r.pluginHandler.Deactivate)
-			admin.DELETE("/plugins/:id", r.pluginHandler.Uninstall)
-			admin.GET("/plugins/:id/health", r.pluginHandler.HealthCheck)
-			admin.GET("/plugins/:id/stats", r.pluginHandler.GetStats)
+		// User application management (tenant admin)
+		admin.GET("/applications", r.userAppHandler.AdminListApplications)
+		admin.POST("/applications/:id/approve", r.userAppHandler.AdminApproveRequest)
+		admin.POST("/applications/:id/reject", r.userAppHandler.AdminRejectRequest)
 
-			// User application management (tenant admin)
-			admin.GET("/applications", r.userAppHandler.AdminListApplications)
-			admin.POST("/applications/:id/approve", r.userAppHandler.AdminApproveRequest)
-			admin.POST("/applications/:id/reject", r.userAppHandler.AdminRejectRequest)
+		// User invitation management
+		admin.POST("/invitations", r.userAppHandler.AdminSendInvitation)
+		admin.GET("/invitations", r.userAppHandler.AdminListApplications)
+		admin.DELETE("/invitations/:id", r.userAppHandler.AdminCancelInvitation)
 
-			// User invitation management
-			admin.POST("/invitations", r.userAppHandler.AdminSendInvitation)
-			admin.GET("/invitations", r.userAppHandler.AdminListApplications) // Same as applications
-			admin.DELETE("/invitations/:id", r.userAppHandler.AdminCancelInvitation)
+		// Direct user creation
+		admin.POST("/users", r.userAppHandler.AdminCreateUser)
 
-			// Direct user creation
-			admin.POST("/users", r.userAppHandler.AdminCreateUser)
+		// Budget alert management
+		admin.GET("/budget/alerts", r.budgetAlertHandler.List)
+		admin.POST("/budget/alerts", r.budgetAlertHandler.Create)
+		admin.GET("/budget/alerts/:id", r.budgetAlertHandler.Get)
+		admin.PUT("/budget/alerts/:id", r.budgetAlertHandler.Update)
+		admin.POST("/budget/alerts/:id/enable", r.budgetAlertHandler.Enable)
+		admin.POST("/budget/alerts/:id/disable", r.budgetAlertHandler.Disable)
+		admin.DELETE("/budget/alerts/:id", r.budgetAlertHandler.Delete)
 
-			// Budget alert management
-			admin.GET("/budget/alerts", r.budgetAlertHandler.List)
-			admin.POST("/budget/alerts", r.budgetAlertHandler.Create)
-			admin.GET("/budget/alerts/:id", r.budgetAlertHandler.Get)
-			admin.PUT("/budget/alerts/:id", r.budgetAlertHandler.Update)
-			admin.POST("/budget/alerts/:id/enable", r.budgetAlertHandler.Enable)
-			admin.POST("/budget/alerts/:id/disable", r.budgetAlertHandler.Disable)
-			admin.DELETE("/budget/alerts/:id", r.budgetAlertHandler.Delete)
+		// Provider account management (multi-key support with failover)
+		if r.providerAccountHandler != nil {
+			admin.GET("/providers/:provider/status", r.providerAccountHandler.GetProviderStatus)
+			admin.GET("/providers/status", r.providerAccountHandler.GetAllProvidersStatus)
+			admin.POST("/providers/:provider/switch", r.providerAccountHandler.SwitchAccount)
+			admin.GET("/providers/accounts/:account_id", r.providerAccountHandler.GetAccountDetail)
+			admin.GET("/providers/:provider/history", r.providerAccountHandler.GetSwitchHistory)
+			admin.POST("/providers/accounts/:account_id/recover", r.providerAccountHandler.ManualRecoverAccount)
+			admin.GET("/providers/metrics", r.providerAccountHandler.GetRealTimeMetrics)
+			admin.POST("/providers/cache/refresh", r.providerAccountHandler.ForceRefreshCache)
+			admin.GET("/providers/cache/stats", r.providerAccountHandler.GetCacheStats)
 
-			// Provider account management (multi-key support with failover)
-			if r.providerAccountHandler != nil {
-				admin.GET("/providers/:provider/status", r.providerAccountHandler.GetProviderStatus)
-				admin.GET("/providers/status", r.providerAccountHandler.GetAllProvidersStatus)
-				admin.POST("/providers/:provider/switch", r.providerAccountHandler.SwitchAccount)
-				admin.GET("/providers/accounts/:account_id", r.providerAccountHandler.GetAccountDetail)
-				admin.GET("/providers/:provider/history", r.providerAccountHandler.GetSwitchHistory)
-				admin.POST("/providers/accounts/:account_id/recover", r.providerAccountHandler.ManualRecoverAccount)
-				admin.GET("/providers/metrics", r.providerAccountHandler.GetRealTimeMetrics)
-				admin.POST("/providers/cache/refresh", r.providerAccountHandler.ForceRefreshCache)
-				admin.GET("/providers/cache/stats", r.providerAccountHandler.GetCacheStats)
-			}
+			// 独享Provider账号管理（租户）
+			admin.GET("/providers/dedicated", r.providerAccountHandler.ListTenantDedicatedAccounts)
+			admin.POST("/providers/dedicated", r.providerAccountHandler.CreateTenantDedicatedAccount)
+			admin.PUT("/providers/dedicated/:id", r.providerAccountHandler.UpdateDedicatedAccount)
+			admin.DELETE("/providers/dedicated/:id", r.providerAccountHandler.DeleteDedicatedAccount)
+			admin.PUT("/providers/dedicated/settings", r.providerAccountHandler.ToggleTenantDedicated)
+		}
 	}
 
 	user := r.engine.Group("/user")
@@ -332,11 +292,25 @@ func (r *Router) setupRoutes() {
 		apiKeyWrite.POST("/api-keys", r.apiKeyHandler.CreateMyAPIKey)
 	}
 
+	// 独享Provider账号管理（用户）
+	if r.providerAccountHandler != nil {
+		userProviders := r.engine.Group("/user/providers")
+		userProviders.Use(r.authMiddleware)
+		userProviders.Use(middleware.RequireTenantWrite())
+		{
+			userProviders.GET("/dedicated", r.providerAccountHandler.ListUserDedicatedAccounts)
+			userProviders.POST("/dedicated", r.providerAccountHandler.CreateUserDedicatedAccount)
+			userProviders.PUT("/dedicated/:id", r.providerAccountHandler.UpdateDedicatedAccount)
+			userProviders.DELETE("/dedicated/:id", r.providerAccountHandler.DeleteDedicatedAccount)
+			userProviders.PUT("/dedicated/settings", r.providerAccountHandler.ToggleUserDedicated)
+		}
+	}
+
 	// MCP endpoint (Model Context Protocol for Claude Code CLI)
 	mcp := r.engine.Group("/mcp")
 	{
-		mcp.POST("", r.mcpHandler.HandleMCP)   // JSON-RPC requests
-		mcp.GET("", r.mcpHandler.HandleSSE)    // SSE streaming
+		mcp.POST("", r.mcpHandler.HandleMCP) // JSON-RPC requests
+		mcp.GET("", r.mcpHandler.HandleSSE)  // SSE streaming
 	}
 
 	// Platform admin routes (requires platform admin authentication)
@@ -373,6 +347,12 @@ func (r *Router) setupRoutes() {
 				billingGroup.POST("/applications/:id/reject", r.platformHandler.RejectApplication)
 				billingGroup.PUT("/tenants/:id/suspend", r.platformHandler.SuspendTenant)
 				billingGroup.PUT("/tenants/:id/activate", r.platformHandler.ActivateTenant)
+
+				// 独享Provider开关（平台管理员操作）
+				if r.providerAccountHandler != nil {
+					billingGroup.PUT("/tenants/:id/dedicated", r.providerAccountHandler.PlatformToggleTenantDedicated)
+					billingGroup.PUT("/users/:id/dedicated", r.providerAccountHandler.PlatformToggleUserDedicated)
+				}
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"github.com/zhaojiewen/open-station/internal/domain/repository"
 	"github.com/zhaojiewen/open-station/pkg/logger"
 	"github.com/zhaojiewen/open-station/pkg/metrics"
@@ -14,23 +15,27 @@ import (
 
 // BillingEvent represents a billing event to be processed asynchronously
 type BillingEvent struct {
-	TenantID         uuid.UUID
-	UserID           uuid.UUID
-	APIKeyID         uuid.UUID
-	RequestID        string
-	Provider         string
-	ModelID          string
-	PromptTokens     int64
-	CompletionTokens int64
-	LatencyMs        int
-	StatusCode       int
-	CreatedAt        time.Time
+	TenantID             uuid.UUID
+	UserID               uuid.UUID
+	APIKeyID             uuid.UUID
+	RequestID            string
+	Provider             string
+	ModelID              string
+	PromptTokens         int64
+	CompletionTokens     int64
+	CacheReadTokens      int64
+	CacheCreationTokens  int64
+	LatencyMs            int
+	StatusCode           int
+	CreatedAt            time.Time
 }
 
 // TokenUpdateEvent represents a token usage update event
 type TokenUpdateEvent struct {
 	APIKeyID uuid.UUID
+	Provider string
 	Tokens   int64
+	Cost     decimal.Decimal
 }
 
 // AsyncBillingQueue processes billing events asynchronously
@@ -142,6 +147,8 @@ func (q *AsyncBillingQueue) billingWorker() {
 				event.ModelID,
 				event.PromptTokens,
 				event.CompletionTokens,
+				event.CacheReadTokens,
+				event.CacheCreationTokens,
 				event.LatencyMs,
 				event.StatusCode,
 			)
@@ -164,6 +171,15 @@ func (q *AsyncBillingQueue) billingWorker() {
 					zap.String("api_key_id", event.APIKeyID.String()),
 					zap.Error(err),
 				)
+			}
+			if event.Provider != "" {
+				if err := q.apiKeyRepo.UpdateProviderUsage(ctx, event.APIKeyID, event.Provider, event.Tokens, event.Cost); err != nil {
+					logger.Error("failed to update provider usage async",
+						zap.String("api_key_id", event.APIKeyID.String()),
+						zap.String("provider", event.Provider),
+						zap.Error(err),
+					)
+				}
 			}
 		}
 	}
@@ -219,6 +235,15 @@ func (q *AsyncBillingQueue) flushPending() {
 					zap.Error(err),
 				)
 			}
+			if event.Provider != "" {
+				if err := q.apiKeyRepo.UpdateProviderUsage(ctx, event.APIKeyID, event.Provider, event.Tokens, event.Cost); err != nil {
+					logger.Error("failed to flush provider usage update",
+						zap.String("api_key_id", event.APIKeyID.String()),
+						zap.String("provider", event.Provider),
+						zap.Error(err),
+					)
+				}
+			}
 		}
 	} else {
 		q.tokenMutex.Unlock()
@@ -244,6 +269,8 @@ func (q *AsyncBillingQueue) processBatchBillings(ctx context.Context, events []B
 			event.ModelID,
 			event.PromptTokens,
 			event.CompletionTokens,
+			event.CacheReadTokens,
+			event.CacheCreationTokens,
 			event.LatencyMs,
 			event.StatusCode,
 		)
@@ -265,30 +292,34 @@ func (q *AsyncBillingQueue) processBatchBillings(ctx context.Context, events []B
 func (q *AsyncBillingQueue) QueueBillingAsync(
 	tenantID, userID, apiKeyID uuid.UUID,
 	requestID, provider, modelID string,
-	promptTokens, completionTokens int64,
+	promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens int64,
 	latencyMs, statusCode int,
 ) {
 	event := BillingEvent{
-		TenantID:         tenantID,
-		UserID:           userID,
-		APIKeyID:         apiKeyID,
-		RequestID:        requestID,
-		Provider:         provider,
-		ModelID:          modelID,
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		LatencyMs:        latencyMs,
-		StatusCode:       statusCode,
-		CreatedAt:        time.Now(),
+		TenantID:            tenantID,
+		UserID:              userID,
+		APIKeyID:            apiKeyID,
+		RequestID:           requestID,
+		Provider:            provider,
+		ModelID:             modelID,
+		PromptTokens:        promptTokens,
+		CompletionTokens:    completionTokens,
+		CacheReadTokens:     cacheReadTokens,
+		CacheCreationTokens: cacheCreationTokens,
+		LatencyMs:           latencyMs,
+		StatusCode:          statusCode,
+		CreatedAt:           time.Now(),
 	}
 	q.EnqueueBilling(event)
 }
 
 // QueueTokenUpdateAsync is a convenience method for quick async token update
-func (q *AsyncBillingQueue) QueueTokenUpdateAsync(apiKeyID uuid.UUID, tokens int64) {
+func (q *AsyncBillingQueue) QueueTokenUpdateAsync(apiKeyID uuid.UUID, provider string, tokens int64, cost decimal.Decimal) {
 	event := TokenUpdateEvent{
 		APIKeyID: apiKeyID,
+		Provider: provider,
 		Tokens:   tokens,
+		Cost:     cost,
 	}
 	q.EnqueueTokenUpdate(event)
 }

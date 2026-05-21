@@ -294,6 +294,12 @@ func (s *AuthService) UpdateAPIKeyTokenUsage(ctx context.Context, apiKeyID uuid.
 	return s.apiKeyRepo.UpdateTokenUsage(ctx, apiKeyID, tokens)
 }
 
+// UpdateAPIKeyProviderUsage updates per-provider token and cost usage for an API key.
+func (s *AuthService) UpdateAPIKeyProviderUsage(ctx context.Context, apiKeyID uuid.UUID, provider string, tokens int64, cost decimal.Decimal) error {
+	s.permissionsCache.Delete(apiKeyID)
+	return s.apiKeyRepo.UpdateProviderUsage(ctx, apiKeyID, provider, tokens, cost)
+}
+
 // UpdateAPIKeyLastUsed updates the last used timestamp for an API key
 func (s *AuthService) UpdateAPIKeyLastUsed(ctx context.Context, apiKeyID uuid.UUID) error {
 	return s.apiKeyRepo.UpdateLastUsed(ctx, apiKeyID)

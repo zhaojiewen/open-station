@@ -17,7 +17,6 @@ import (
 	"github.com/zhaojiewen/open-station/internal/infrastructure/persistence/postgres/repositories"
 	redisconn "github.com/zhaojiewen/open-station/internal/infrastructure/persistence/redis"
 	ratelimit "github.com/zhaojiewen/open-station/internal/infrastructure/persistence/redis"
-	"github.com/zhaojiewen/open-station/internal/infrastructure/proxy"
 	"github.com/zhaojiewen/open-station/pkg/config"
 	"github.com/zhaojiewen/open-station/pkg/logger"
 	"github.com/zhaojiewen/open-station/pkg/password"
@@ -56,12 +55,10 @@ type RepositoriesContainer struct {
 type ServicesContainer struct {
 	Auth             *auth.AuthService
 	Billing          *service.BillingService
-	Proxy            *proxy.ProxyService
 	MCP              *service.MCPService
 	ProviderAccount  *service.ProviderAccountService
 	Init             *service.InitService
 	AsyncBilling     *service.AsyncBillingQueue
-	Plugin           *service.PluginService
 	CostLimit        *service.CostLimitService
 	UserApplication  *service.UserApplicationService
 	TenantApplication *service.TenantApplicationService
@@ -198,12 +195,10 @@ func (c *AppContainer) initServices(cfg *ContainerConfig) error {
 		c.Infrastructure.Redis,
 	)
 
-	// Proxy service
-	c.Services.Proxy = proxy.NewProxyService(&cfg.Config.Providers)
-
 	// Billing service
 	c.Services.Billing = service.NewBillingService(
 		c.Repositories.Tenant,
+		c.Repositories.User,
 		c.Repositories.Usage,
 		c.Repositories.Bill,
 		c.Repositories.Recharge,
@@ -334,7 +329,6 @@ func (c *AppContainer) initServices(cfg *ContainerConfig) error {
 		c.Services.Auth,
 		c.Services.Billing,
 		c.Services.ProviderAccount,
-		c.Services.Plugin,
 		c.Services.CostLimit,
 		c.Services.UserApplication,
 		c.Services.TenantApplication,
@@ -480,13 +474,13 @@ func NewBillingServiceFacade(billing *service.BillingService, async *service.Asy
 func (f *BillingServiceFacade) RecordUsageAsync(
 	tenantID, userID, apiKeyID uuid.UUID,
 	requestID, provider, modelID string,
-	promptTokens, completionTokens int64,
+	promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens int64,
 	latencyMs, statusCode int,
 ) {
 	f.asyncBilling.QueueBillingAsync(
 		tenantID, userID, apiKeyID,
 		requestID, provider, modelID,
-		promptTokens, completionTokens,
+		promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens,
 		latencyMs, statusCode,
 	)
 }
@@ -495,21 +489,21 @@ func (f *BillingServiceFacade) RecordUsageSync(
 	ctx context.Context,
 	tenantID, userID, apiKeyID uuid.UUID,
 	requestID, provider, modelID string,
-	promptTokens, completionTokens int64,
+	promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens int64,
 	latencyMs, statusCode int,
 ) (*entity.UsageRecord, error) {
 	return f.billingService.RecordUsage(ctx,
 		tenantID, userID, apiKeyID,
 		requestID, provider, modelID,
-		promptTokens, completionTokens,
+		promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens,
 		latencyMs, statusCode,
 	)
 }
 
-func (f *BillingServiceFacade) CheckBalance(ctx context.Context, tenantID uuid.UUID) (decimal.Decimal, error) {
-	return f.billingService.CheckBalance(ctx, tenantID)
+func (f *BillingServiceFacade) CheckBalance(ctx context.Context, userID uuid.UUID) (decimal.Decimal, error) {
+	return f.billingService.CheckBalance(ctx, userID)
 }
 
-func (f *BillingServiceFacade) CalculateCost(ctx context.Context, provider, modelID string, promptTokens, completionTokens int64) (decimal.Decimal, error) {
-	return f.billingService.CalculateCost(ctx, provider, modelID, promptTokens, completionTokens)
+func (f *BillingServiceFacade) CalculateCost(ctx context.Context, provider, modelID string, promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens int64) (decimal.Decimal, error) {
+	return f.billingService.CalculateCost(ctx, provider, modelID, promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens)
 }

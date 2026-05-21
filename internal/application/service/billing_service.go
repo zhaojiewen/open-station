@@ -14,6 +14,7 @@ import (
 
 type BillingService struct {
 	tenantRepo   repository.TenantRepository
+	userRepo     repository.UserRepository
 	usageRepo    repository.UsageRepository
 	billRepo     repository.BillRepository
 	rechargeRepo repository.RechargeRepository
@@ -22,6 +23,7 @@ type BillingService struct {
 
 func NewBillingService(
 	tenantRepo repository.TenantRepository,
+	userRepo repository.UserRepository,
 	usageRepo repository.UsageRepository,
 	billRepo repository.BillRepository,
 	rechargeRepo repository.RechargeRepository,
@@ -29,6 +31,7 @@ func NewBillingService(
 ) *BillingService {
 	return &BillingService{
 		tenantRepo:   tenantRepo,
+		userRepo:     userRepo,
 		usageRepo:    usageRepo,
 		billRepo:     billRepo,
 		rechargeRepo: rechargeRepo,
@@ -36,56 +39,117 @@ func NewBillingService(
 	}
 }
 
-func (s *BillingService) CalculateCost(ctx context.Context, provider, modelID string, promptTokens, completionTokens int64) (decimal.Decimal, error) {
+func (s *BillingService) CalculateCost(ctx context.Context, provider, modelID string, promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens int64) (decimal.Decimal, error) {
 	model, err := s.modelRepo.GetPricing(ctx, provider, modelID)
 	if err != nil {
 		return decimal.Zero, fmt.Errorf("failed to get pricing: %w", err)
 	}
 
-	promptCost := model.PromptPrice.Mul(decimal.NewFromInt(promptTokens)).Div(decimal.NewFromInt(1000))
-	completionCost := model.CompletionPrice.Mul(decimal.NewFromInt(completionTokens)).Div(decimal.NewFromInt(1000))
-	totalCost := promptCost.Add(completionCost)
+	// uncached input tokens = total input minus cache hits
+	uncachedInput := promptTokens - cacheReadTokens
+	if uncachedInput < 0 {
+		uncachedInput = 0
+	}
 
-	return totalCost, nil
+	cost := model.PromptPrice.Mul(decimal.NewFromInt(uncachedInput)).Div(decimal.NewFromInt(1000))
+
+	// cache read tokens at reduced price
+	if cacheReadTokens > 0 && !model.CacheReadPrice.IsZero() {
+		cost = cost.Add(model.CacheReadPrice.Mul(decimal.NewFromInt(cacheReadTokens)).Div(decimal.NewFromInt(1000)))
+	} else if cacheReadTokens > 0 {
+		cost = cost.Add(model.PromptPrice.Mul(decimal.NewFromInt(cacheReadTokens)).Div(decimal.NewFromInt(1000)))
+	}
+
+	// cache creation tokens at write price
+	if cacheCreationTokens > 0 && !model.CacheWritePrice.IsZero() {
+		cost = cost.Add(model.CacheWritePrice.Mul(decimal.NewFromInt(cacheCreationTokens)).Div(decimal.NewFromInt(1000)))
+	} else if cacheCreationTokens > 0 {
+		cost = cost.Add(model.PromptPrice.Mul(decimal.NewFromInt(cacheCreationTokens)).Div(decimal.NewFromInt(1000)))
+	}
+
+	completionCost := model.CompletionPrice.Mul(decimal.NewFromInt(completionTokens)).Div(decimal.NewFromInt(1000))
+	cost = cost.Add(completionCost)
+
+	return cost, nil
 }
 
-func (s *BillingService) CheckBalance(ctx context.Context, tenantID uuid.UUID) (decimal.Decimal, error) {
+func (s *BillingService) CheckBalance(ctx context.Context, userID uuid.UUID) (decimal.Decimal, error) {
+	return s.userRepo.GetBalance(ctx, userID)
+}
+
+// GetTenantBalance returns tenant balance for admin/display purposes.
+func (s *BillingService) GetTenantBalance(ctx context.Context, tenantID uuid.UUID) (decimal.Decimal, error) {
 	return s.tenantRepo.GetBalance(ctx, tenantID)
 }
 
-func (s *BillingService) RecordUsage(ctx context.Context, tenantID, userID, apiKeyID uuid.UUID, requestID, provider, modelID string, promptTokens, completionTokens int64, latencyMs int, statusCode int) (*entity.UsageRecord, error) {
-	cost, err := s.CalculateCost(ctx, provider, modelID, promptTokens, completionTokens)
+func (s *BillingService) RecordUsage(ctx context.Context, tenantID, userID, apiKeyID uuid.UUID, requestID, provider, modelID string, promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens int64, latencyMs int, statusCode int) (*entity.UsageRecord, error) {
+	cost, err := s.CalculateCost(ctx, provider, modelID, promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens)
 	if err != nil {
 		return nil, err
 	}
 
-	// Atomically deduct balance: only succeeds if balance >= cost
-	if err := s.tenantRepo.DeductBalance(ctx, tenantID, cost); err != nil {
+	// Atomically deduct balance from user: only succeeds if balance >= cost
+	if err := s.userRepo.DeductBalance(ctx, userID, cost); err != nil {
 		return nil, apperrors.ErrInsufficientBalance
 	}
 
 	record := &entity.UsageRecord{
-		TenantID:         tenantID,
-		UserID:           userID,
-		APIKeyID:         apiKeyID,
-		RequestID:        requestID,
-		Provider:         provider,
-		ModelID:          modelID,
-		PromptTokens:     int(promptTokens),
-		CompletionTokens: int(completionTokens),
-		TotalTokens:      int(promptTokens + completionTokens),
-		Cost:             cost,
-		Currency:         "USD",
-		LatencyMs:        &latencyMs,
-		StatusCode:       &statusCode,
+		TenantID:               tenantID,
+		UserID:                 userID,
+		APIKeyID:               apiKeyID,
+		RequestID:              requestID,
+		Provider:               provider,
+		ModelID:                modelID,
+		PromptTokens:           int(promptTokens),
+		CompletionTokens:       int(completionTokens),
+		TotalTokens:            int(promptTokens + completionTokens),
+		CacheReadInputTokens:   int(cacheReadTokens),
+		CacheCreationInputTokens: int(cacheCreationTokens),
+		Cost:                   cost,
+		Currency:               "USD",
+		LatencyMs:              &latencyMs,
+		StatusCode:             &statusCode,
 	}
 
 	if err := s.usageRepo.Create(ctx, record); err != nil {
-		s.tenantRepo.UpdateBalance(ctx, tenantID, cost)
+		s.userRepo.UpdateBalance(ctx, userID, cost)
 		return nil, fmt.Errorf("failed to create usage record: %w", err)
 	}
 
 	return record, nil
+}
+
+func (s *BillingService) CalculateEquivalentTokens(ctx context.Context, provider, modelID string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) int64 {
+	model, err := s.modelRepo.GetPricing(ctx, provider, modelID)
+	if err != nil {
+		return inputTokens + outputTokens
+	}
+
+	// uncached input tokens
+	uncachedInput := inputTokens - cacheReadTokens
+	if uncachedInput < 0 {
+		uncachedInput = 0
+	}
+
+	// actual cost in USD
+	cost := model.PromptPrice.Mul(decimal.NewFromInt(uncachedInput)).Div(decimal.NewFromInt(1000))
+	if cacheReadTokens > 0 && !model.CacheReadPrice.IsZero() {
+		cost = cost.Add(model.CacheReadPrice.Mul(decimal.NewFromInt(cacheReadTokens)).Div(decimal.NewFromInt(1000)))
+	} else if cacheReadTokens > 0 {
+		cost = cost.Add(model.PromptPrice.Mul(decimal.NewFromInt(cacheReadTokens)).Div(decimal.NewFromInt(1000)))
+	}
+	if cacheCreationTokens > 0 && !model.CacheWritePrice.IsZero() {
+		cost = cost.Add(model.CacheWritePrice.Mul(decimal.NewFromInt(cacheCreationTokens)).Div(decimal.NewFromInt(1000)))
+	} else if cacheCreationTokens > 0 {
+		cost = cost.Add(model.PromptPrice.Mul(decimal.NewFromInt(cacheCreationTokens)).Div(decimal.NewFromInt(1000)))
+	}
+	cost = cost.Add(model.CompletionPrice.Mul(decimal.NewFromInt(outputTokens)).Div(decimal.NewFromInt(1000)))
+
+	// convert cost to equivalent regular prompt tokens
+	if !model.PromptPrice.IsZero() {
+		return cost.Div(model.PromptPrice).Mul(decimal.NewFromInt(1000)).IntPart()
+	}
+	return inputTokens + outputTokens
 }
 
 func (s *BillingService) Recharge(ctx context.Context, tenantID uuid.UUID, amount decimal.Decimal, paymentMethod, paymentID, notes string) (*entity.RechargeRecord, error) {

@@ -20,8 +20,6 @@ type MCPService struct {
 	authService            *auth.AuthService
 	billingService         *BillingService
 	providerAccountService *ProviderAccountService
-	pluginService          *PluginService
-	pluginMCPHandlers      *PluginMCPHandlers
 	costLimitService       *CostLimitService
 	userAppService         *UserApplicationService
 	tenantAppService       *TenantApplicationService
@@ -51,7 +49,6 @@ func NewMCPService(
 	authService *auth.AuthService,
 	billingService *BillingService,
 	providerAccountService *ProviderAccountService,
-	pluginService *PluginService,
 	costLimitService *CostLimitService,
 	userAppService *UserApplicationService,
 	tenantAppService *TenantApplicationService,
@@ -61,18 +58,12 @@ func NewMCPService(
 		authService:            authService,
 		billingService:         billingService,
 		providerAccountService: providerAccountService,
-		pluginService:          pluginService,
 		costLimitService:       costLimitService,
 		userAppService:         userAppService,
 		tenantAppService:       tenantAppService,
 		budgetAlertService:     budgetAlertService,
 		sessions:               make(map[string]*MCPSession),
 		sessionTimeout:         30 * time.Minute,
-	}
-
-	// Initialize plugin MCP handlers if plugin service is available
-	if pluginService != nil {
-		s.pluginMCPHandlers = NewPluginMCPHandlers(pluginService)
 	}
 
 	return s
@@ -165,17 +156,6 @@ func (s *MCPService) CallTool(ctx context.Context, session *MCPSession, toolName
 
 // executeTool executes the actual tool logic
 func (s *MCPService) executeTool(ctx context.Context, session *MCPSession, toolName string, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	// First try plugin tools if plugin handlers are available
-	if s.pluginMCPHandlers != nil {
-		if result, err := s.pluginMCPHandlers.HandleTool(ctx, toolName, args); err == nil {
-			return result, nil
-		} else if err.Error() != "unknown plugin tool: "+toolName {
-			// Only return error if it's a known plugin tool that failed
-			return result, err
-		}
-	}
-
-	// Fall through to standard tools
 	switch toolName {
 	case "check_balance":
 		return s.toolCheckBalance(ctx, session)

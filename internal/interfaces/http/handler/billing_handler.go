@@ -23,23 +23,23 @@ func NewBillingHandler(billingService *service.BillingService) *BillingHandler {
 }
 
 func (h *BillingHandler) GetBalance(c *gin.Context) {
-	tenantIDStr := c.Param("tenant_id")
-	tenantID, err := uuid.Parse(tenantIDStr)
+	userIDStr := c.Param("user_id")
+	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
 		return
 	}
 
-	balance, err := h.billingService.CheckBalance(c.Request.Context(), tenantID)
+	balance, err := h.billingService.CheckBalance(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"tenant_id": tenantID,
-		"balance":   balance.String(),
-		"currency":  "USD",
+		"user_id":  userID,
+		"balance":  balance.String(),
+		"currency": "USD",
 	})
 }
 

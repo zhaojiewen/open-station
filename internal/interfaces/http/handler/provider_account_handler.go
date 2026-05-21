@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/zhaojiewen/open-station/internal/application/service"
+	"github.com/zhaojiewen/open-station/internal/domain/entity"
 	"github.com/zhaojiewen/open-station/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -349,4 +350,187 @@ func (h *ProviderAccountHandler) GetRealTimeMetrics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, metrics)
+}
+
+// ==================== 独享Provider账号管理 ====================
+
+type DedicatedAccountRequest struct {
+	Provider string `json:"provider" binding:"required"`
+	Name     string `json:"name" binding:"required"`
+	APIKey   string `json:"api_key" binding:"required"`
+	BaseURL  string `json:"base_url"`
+}
+
+type ToggleDedicatedRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ListTenantDedicatedAccounts GET /admin/providers/dedicated
+func (h *ProviderAccountHandler) ListTenantDedicatedAccounts(c *gin.Context) {
+	tenantID := c.MustGet("tenant_id").(uuid.UUID)
+	accounts, err := h.accountService.ListDedicatedByTenant(c.Request.Context(), tenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if accounts == nil {
+		accounts = []entity.ProviderAccount{}
+	}
+	c.JSON(http.StatusOK, accounts)
+}
+
+// CreateTenantDedicatedAccount POST /admin/providers/dedicated
+func (h *ProviderAccountHandler) CreateTenantDedicatedAccount(c *gin.Context) {
+	tenantID := c.MustGet("tenant_id").(uuid.UUID)
+	var req DedicatedAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	account, err := h.accountService.CreateDedicatedAccount(c.Request.Context(), req.Provider, req.Name, req.APIKey, req.BaseURL, tenantID, uuid.Nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, account)
+}
+
+// UpdateDedicatedAccount PUT /admin/providers/dedicated/:id and /user/providers/dedicated/:id
+func (h *ProviderAccountHandler) UpdateDedicatedAccount(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var req DedicatedAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	account, err := h.accountService.UpdateDedicatedAccount(c.Request.Context(), id, req.Provider, req.Name, req.APIKey, req.BaseURL)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, account)
+}
+
+// DeleteDedicatedAccount DELETE /admin/providers/dedicated/:id and /user/providers/dedicated/:id
+func (h *ProviderAccountHandler) DeleteDedicatedAccount(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := h.accountService.DeleteAccount(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// ToggleTenantDedicated PUT /admin/providers/dedicated/settings
+func (h *ProviderAccountHandler) ToggleTenantDedicated(c *gin.Context) {
+	tenantID := c.MustGet("tenant_id").(uuid.UUID)
+	var req ToggleDedicatedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.accountService.SetTenantUseDedicated(c.Request.Context(), tenantID, req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"use_dedicated_provider": req.Enabled})
+}
+
+// ListUserDedicatedAccounts GET /user/providers/dedicated
+func (h *ProviderAccountHandler) ListUserDedicatedAccounts(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	accounts, err := h.accountService.ListDedicatedByUser(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if accounts == nil {
+		accounts = []entity.ProviderAccount{}
+	}
+	c.JSON(http.StatusOK, accounts)
+}
+
+// CreateUserDedicatedAccount POST /user/providers/dedicated
+func (h *ProviderAccountHandler) CreateUserDedicatedAccount(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	var req DedicatedAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	account, err := h.accountService.CreateDedicatedAccount(c.Request.Context(), req.Provider, req.Name, req.APIKey, req.BaseURL, uuid.Nil, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, account)
+}
+
+// ToggleUserDedicated PUT /user/providers/dedicated/settings
+func (h *ProviderAccountHandler) ToggleUserDedicated(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	var req ToggleDedicatedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.accountService.SetUserUseDedicated(c.Request.Context(), userID, req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"use_dedicated_provider": req.Enabled})
+}
+
+// ==================== 平台管理员独享开关 ====================
+
+// PlatformToggleTenantDedicated PUT /platform/tenants/:id/dedicated
+func (h *ProviderAccountHandler) PlatformToggleTenantDedicated(c *gin.Context) {
+	tenantID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		return
+	}
+	var req ToggleDedicatedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.accountService.SetTenantUseDedicated(c.Request.Context(), tenantID, req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	logger.Info("platform admin toggled tenant dedicated provider",
+		zap.String("tenant_id", tenantID.String()),
+		zap.Bool("enabled", req.Enabled))
+	c.JSON(http.StatusOK, gin.H{"tenant_id": tenantID, "use_dedicated_provider": req.Enabled})
+}
+
+// PlatformToggleUserDedicated PUT /platform/users/:id/dedicated
+func (h *ProviderAccountHandler) PlatformToggleUserDedicated(c *gin.Context) {
+	userID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+	var req ToggleDedicatedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.accountService.SetUserUseDedicated(c.Request.Context(), userID, req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	logger.Info("platform admin toggled user dedicated provider",
+		zap.String("user_id", userID.String()),
+		zap.Bool("enabled", req.Enabled))
+	c.JSON(http.StatusOK, gin.H{"user_id": userID, "use_dedicated_provider": req.Enabled})
 }

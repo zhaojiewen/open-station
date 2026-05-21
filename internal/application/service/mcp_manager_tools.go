@@ -273,7 +273,7 @@ func (s *MCPService) toolGetUserDetail(ctx context.Context, args map[string]inte
 		keys = []entity.APIKey{}
 	}
 
-	balance, err := s.billingService.CheckBalance(ctx, user.TenantID)
+	balance, err := s.billingService.CheckBalance(ctx, user.ID)
 	if err != nil {
 		balance = decimal.Zero
 	}
@@ -289,7 +289,7 @@ func (s *MCPService) toolGetUserDetail(ctx context.Context, args map[string]inte
 			"created_at": user.CreatedAt,
 			"last_login": user.LastLoginAt,
 		},
-		"tenant_balance": balance.String(),
+		"user_balance": balance.String(),
 		"api_keys_count": len(keys),
 	}
 	jsonData, _ := json.MarshalIndent(result, "", "  ")
@@ -326,7 +326,7 @@ func (s *MCPService) toolAdjustBalance(ctx context.Context, args map[string]inte
 		return nil, err
 	}
 
-	newBalance, err := s.billingService.CheckBalance(ctx, tenantID)
+	newBalance, err := s.billingService.GetTenantBalance(ctx, tenantID)
 	if err != nil {
 		newBalance = decimal.Zero
 	}

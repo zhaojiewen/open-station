@@ -15,7 +15,7 @@ func TestNewPaymentService(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	if service == nil {
 		t.Error("NewPaymentService should not return nil")
@@ -27,7 +27,7 @@ func TestCreatePaymentOrder(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	userID := uuid.New()
 	req := &PaymentOrderRequest{
@@ -73,7 +73,7 @@ func TestCreatePaymentOrder_BankTransfer(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	req := &PaymentOrderRequest{
 		PaymentMode:     "organization",
@@ -102,7 +102,7 @@ func TestGetPaymentOrder(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	req := &PaymentOrderRequest{
 		PaymentMode: "individual",
@@ -127,7 +127,7 @@ func TestGetPaymentOrderByNumber(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	req := &PaymentOrderRequest{
 		PaymentMode: "individual",
@@ -152,7 +152,7 @@ func TestCancelPaymentOrder(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	req := &PaymentOrderRequest{
 		PaymentMode: "individual",
@@ -179,7 +179,7 @@ func TestCancelPaymentOrder_AlreadyProcessed(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	req := &PaymentOrderRequest{
 		PaymentMode: "individual",
@@ -205,7 +205,7 @@ func TestCancelPaymentOrder_NotFound(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	err := service.CancelPaymentOrder(context.Background(), uuid.New())
 	if err == nil {
@@ -218,7 +218,7 @@ func TestProcessPaymentCallback_Success(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	userQuotaID := uuid.New()
 	quota := &entity.UserQuota{
@@ -266,7 +266,7 @@ func TestProcessPaymentCallback_OrderNotFound(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	callbackReq := &PaymentCallbackRequest{
 		OrderNumber: "NONEXISTENT",
@@ -285,7 +285,7 @@ func TestProcessPaymentCallback_AlreadyProcessed(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	req := &PaymentOrderRequest{
 		PaymentMode: "individual",
@@ -317,7 +317,7 @@ func TestProcessPaymentCallback_AmountTooLow(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	req := &PaymentOrderRequest{
 		PaymentMode: "individual",
@@ -346,7 +346,7 @@ func TestProcessPaymentCallback_ByPaymentID(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	quota := &entity.UserQuota{
 		UserID:  uuid.New(),
@@ -387,7 +387,7 @@ func TestProcessPaymentCallback_ByOrderNumber(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	quota := &entity.UserQuota{
 		UserID:  uuid.New(),
@@ -426,7 +426,7 @@ func TestProcessIndividualPayment_Recharge(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	quota := &entity.UserQuota{
 		UserID:  uuid.New(),
@@ -460,7 +460,7 @@ func TestProcessIndividualPayment_ActivateQuota(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	quota := &entity.UserQuota{
 		UserID:  uuid.New(),
@@ -497,7 +497,7 @@ func TestProcessIndividualPayment_NoQuotaID(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	order := &entity.PaymentOrder{
 		PaymentMode: "individual",
@@ -518,7 +518,7 @@ func TestProcessIndividualPayment_QuotaNotFound(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	nonExistentID := uuid.New()
 	order := &entity.PaymentOrder{
@@ -540,7 +540,7 @@ func TestProcessIndividualPayment_Subscription(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	quota := &entity.UserQuota{
 		UserID:  uuid.New(),
@@ -569,7 +569,7 @@ func TestProcessIndividualPayment_UnsupportedType(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	quota := &entity.UserQuota{
 		UserID:  uuid.New(),
@@ -597,7 +597,7 @@ func TestProcessOrganizationPayment_Recharge(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	tenant := &entity.Tenant{
 		Name:    "Test Org",
@@ -631,7 +631,7 @@ func TestProcessOrganizationPayment_NoTenantID(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	order := &entity.PaymentOrder{
 		PaymentMode: "organization",
@@ -651,7 +651,7 @@ func TestProcessOrganizationPayment_TenantNotFound(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	nonExistentID := uuid.New()
 	order := &entity.PaymentOrder{
@@ -672,7 +672,7 @@ func TestProcessOrganizationPayment_CreditSettlement(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	tenant := &entity.Tenant{
 		Name:    "Test Org",
@@ -701,7 +701,7 @@ func TestProcessOrganizationPayment_Subscription(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	tenant := &entity.Tenant{
 		Name:    "Test Org",
@@ -730,7 +730,7 @@ func TestProcessOrganizationPayment_UnsupportedType(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	tenant := &entity.Tenant{
 		Name:    "Test Org",
@@ -759,7 +759,7 @@ func TestProcessPayment_InvalidMode(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	order := &entity.PaymentOrder{
 		PaymentMode: "invalid_mode",
@@ -778,7 +778,7 @@ func TestListPaymentOrders_Individual(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	userID := uuid.New()
 	for i := 0; i < 3; i++ {
@@ -814,7 +814,7 @@ func TestListPaymentOrders_Organization(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	tenantID := uuid.New()
 	for i := 0; i < 2; i++ {
@@ -848,7 +848,7 @@ func TestListPaymentOrders_ByStatus(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	req := &PaymentOrderRequest{
 		PaymentMode: "individual",
@@ -877,7 +877,7 @@ func TestGetPendingOrders_User(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	userID := uuid.New()
 	req := &PaymentOrderRequest{
@@ -902,7 +902,7 @@ func TestGetPendingOrders_Tenant(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	tenantID := uuid.New()
 	req := &PaymentOrderRequest{
@@ -928,7 +928,7 @@ func TestCheckExpiredOrders(t *testing.T) {
 	quotaRepo := NewMockUserQuotaRepo()
 	tenantRepo := NewMockTenantPaymentRepo()
 
-	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil)
+	service := NewPaymentService(paymentRepo, quotaRepo, tenantRepo, nil, nil)
 
 	// Create order with past expiry
 	pastTime := time.Now().Add(-1 * time.Hour)

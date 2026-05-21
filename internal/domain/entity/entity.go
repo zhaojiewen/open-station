@@ -1,12 +1,70 @@
 package entity
 
 import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
+
+// ProviderUsageStats tracks per-provider token and cost usage for an API key.
+type ProviderUsageStats struct {
+	UsedTokensThisMonth int64           `json:"used_tokens_this_month"`
+	TokensUsedToday     int64           `json:"tokens_used_today"`
+	MonthlyCostUsed     decimal.Decimal `json:"monthly_cost_used"`
+	DailyCostUsed       decimal.Decimal `json:"daily_cost_used"`
+}
+
+// ProviderUsage is a map of provider name -> usage stats, stored as JSONB.
+type ProviderUsage map[string]*ProviderUsageStats
+
+func (p ProviderUsage) Value() (driver.Value, error) {
+	if p == nil {
+		return "{}", nil
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal ProviderUsage: %w", err)
+	}
+	if len(b) == 0 || string(b) == "null" {
+		return "{}", nil
+	}
+	return string(b), nil
+}
+
+func (p *ProviderUsage) Scan(value interface{}) error {
+	if value == nil {
+		*p = make(ProviderUsage)
+		return nil
+	}
+	var data []byte
+	switch v := value.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return fmt.Errorf("unsupported type for ProviderUsage: %T", value)
+	}
+	if len(data) == 0 || string(data) == "null" {
+		*p = make(ProviderUsage)
+		return nil
+	}
+	return json.Unmarshal(data, p)
+}
+
+func (p ProviderUsage) EnsureProvider(provider string) *ProviderUsageStats {
+	if s, ok := p[provider]; ok {
+		return s
+	}
+	s := &ProviderUsageStats{}
+	p[provider] = s
+	return s
+}
 
 type Tenant struct {
 	ID        uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
@@ -55,6 +113,9 @@ type Tenant struct {
 	ApprovedBy          *uuid.UUID `gorm:"type:uuid" json:"approved_by,omitempty"`              // 审批人
 	ApprovedAt          *time.Time `json:"approved_at,omitempty"`                               // 审批时间
 
+	// 独享Provider账号
+	UseDedicatedProvider bool `gorm:"default:false" json:"use_dedicated_provider"` // 是否使用独享账号
+
 	// 用户管理策略 (原有)
 	ApprovalPolicy      string `gorm:"type:jsonb;default:'{}'" json:"approval_policy,omitempty"`      // 用户审批规则JSON
 	AutoApproveNewUsers bool   `gorm:"default:false" json:"auto_approve_new_users"`                   // 自动审批新用户申请
@@ -95,6 +156,10 @@ type User struct {
 	TokenQuota      *int64           `gorm:"default:0" json:"token_quota,omitempty"`                   // Token限额
 	TokensUsedMonth int64            `gorm:"default:0" json:"tokens_used_month"`                       // 当月已用Token
 
+	// 个人余额 (独立于租户)
+	Balance  decimal.Decimal `gorm:"type:decimal(10,4);default:0" json:"balance"`
+	Currency string          `gorm:"size:3;default:USD" json:"currency"`
+
 	// 申请审批 (原有)
 	ApplicationID  *uuid.UUID `gorm:"type:uuid" json:"application_id,omitempty"`  // 关联用户申请
 	ApprovedBy     *uuid.UUID `gorm:"type:uuid" json:"approved_by,omitempty"`     // 审批人
@@ -107,6 +172,9 @@ type User struct {
 	Status      string     `gorm:"default:active" json:"status"` // active, inactive, pending_verification
 	LastLoginAt       *time.Time `json:"last_login_at,omitempty"`
 	PasswordChangedAt *time.Time `json:"password_changed_at,omitempty"` // 密码修改时间
+
+	// 独享Provider账号
+	UseDedicatedProvider bool `gorm:"default:false" json:"use_dedicated_provider"` // 是否使用独享账号
 
 	// Email verification fields
 	EmailVerified             bool       `gorm:"default:false" json:"email_verified"`
@@ -160,6 +228,9 @@ type APIKey struct {
 	TokenLimitPerDay *int64 `gorm:"default:0" json:"token_limit_per_day,omitempty"`   // 日Token限额
 	TokensUsedToday  int64  `gorm:"default:0" json:"tokens_used_today"`                // 今日已用Token
 
+	// Per-provider usage tracking (JSONB: provider -> ProviderUsageStats)
+	ProviderUsage *ProviderUsage `gorm:"type:jsonb;default:'{}'" json:"provider_usage,omitempty"`
+
 	// 预算预警阈值 (原有)
 	AlertThreshold1 int `gorm:"default:80" json:"alert_threshold_1"`  // 第一级预警阈值(默认80%)
 	AlertThreshold2 int `gorm:"default:90" json:"alert_threshold_2"`  // 第二级预警阈值(默认90%)
@@ -186,6 +257,8 @@ type Model struct {
 
 	PromptPrice     decimal.Decimal `gorm:"type:decimal(10,6);not null" json:"prompt_price"`
 	CompletionPrice decimal.Decimal `gorm:"type:decimal(10,6);not null" json:"completion_price"`
+	CacheReadPrice  decimal.Decimal `gorm:"type:decimal(10,6);default:0" json:"cache_read_price"`
+	CacheWritePrice decimal.Decimal `gorm:"type:decimal(10,6);default:0" json:"cache_write_price"`
 	Currency        string          `gorm:"size:3;default:USD" json:"currency"`
 
 	MaxTokens     *int `gorm:"default:4096" json:"max_tokens,omitempty"`
@@ -209,9 +282,11 @@ type UsageRecord struct {
 	Provider  string `gorm:"not null;size:50;index" json:"provider"`
 	ModelID   string `gorm:"not null;size:100;index" json:"model_id"`
 
-	PromptTokens     int `gorm:"not null" json:"prompt_tokens"`
-	CompletionTokens int `gorm:"not null" json:"completion_tokens"`
-	TotalTokens      int `gorm:"not null" json:"total_tokens"`
+	PromptTokens            int `gorm:"not null" json:"prompt_tokens"`
+	CompletionTokens        int `gorm:"not null" json:"completion_tokens"`
+	TotalTokens             int `gorm:"not null" json:"total_tokens"`
+	CacheReadInputTokens    int `gorm:"default:0" json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `gorm:"default:0" json:"cache_creation_input_tokens"`
 
 	Cost    decimal.Decimal `gorm:"type:decimal(10,6);not null" json:"cost"`
 	Currency string          `gorm:"size:3;default:USD" json:"currency"`
@@ -296,7 +371,7 @@ type AuditLog struct {
 // 支持同一 Provider 配置多个账号，用于故障切换
 type ProviderAccount struct {
 	ID         uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	Provider   string    `gorm:"not null;index:idx_provider_status;size:50" json:"provider"` // openai, anthropic, gemini, deepseek, glm
+	Provider   string    `gorm:"not null;index:idx_provider_status;size:50" json:"provider"` // openai, anthropic, deepseek, glm
 	Name       string    `gorm:"not null;size:255" json:"name"`                             // 账户名称，便于识别
 	APIKey     string    `gorm:"not null;size:255" json:"api_key"`                          // API Key
 	BaseURL    string    `gorm:"size:255" json:"base_url"`                                  // API Base URL（可选）
@@ -331,6 +406,10 @@ type ProviderAccount struct {
 	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`    // 最后使用时间
 	DisabledAt   *time.Time `json:"disabled_at,omitempty"`    // 禁用时间
 	ReactivatedAt *time.Time `json:"reactivated_at,omitempty"` // 重新激活时间
+
+	// 独享账号归属（nil = 公共账号）
+	TenantID *uuid.UUID `gorm:"type:uuid;index" json:"tenant_id,omitempty"`
+	UserID   *uuid.UUID `gorm:"type:uuid;index" json:"user_id,omitempty"`
 }
 
 // ==================== 新增实体 ====================

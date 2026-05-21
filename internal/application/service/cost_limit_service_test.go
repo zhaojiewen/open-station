@@ -146,6 +146,15 @@ func (m *MockCLUserRepo) IncrementTokensUsed(ctx context.Context, id uuid.UUID, 
 }
 func (m *MockCLUserRepo) IncrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
 func (m *MockCLUserRepo) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockCLUserRepo) GetBalance(ctx context.Context, id uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Zero, nil
+}
+func (m *MockCLUserRepo) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
+func (m *MockCLUserRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
 
 type MockCLAPIKeyRepo struct {
 	keys map[uuid.UUID]*entity.APIKey
@@ -218,6 +227,9 @@ func (m *MockCLAPIKeyRepo) IncrementDailyTokens(ctx context.Context, id uuid.UUI
 	return nil
 }
 func (m *MockCLAPIKeyRepo) ResetDailyTokens(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockCLAPIKeyRepo) UpdateProviderUsage(ctx context.Context, id uuid.UUID, provider string, tokens int64, cost decimal.Decimal) error {
+	return nil
+}
 
 // --- CostLimitService Tests ---
 

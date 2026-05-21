@@ -69,7 +69,6 @@ type ProvidersConfig struct {
 	// Legacy static provider configs (deprecated, use Accounts map instead)
 	OpenAI   ProviderConfig `mapstructure:"openai"`
 	Claude   ProviderConfig `mapstructure:"claude"`
-	Gemini   ProviderConfig `mapstructure:"gemini"`
 	DeepSeek ProviderConfig `mapstructure:"deepseek"`
 	GLM      ProviderConfig `mapstructure:"glm"`
 
@@ -82,9 +81,10 @@ type ProvidersConfig struct {
 }
 
 type ProviderConfig struct {
-	BaseURL string        `mapstructure:"base_url"`
-	APIKey  string        `mapstructure:"api_key"`
-	Timeout time.Duration `mapstructure:"timeout"`
+	BaseURL        string        `mapstructure:"base_url"`
+	APIKey         string        `mapstructure:"api_key"`
+	Timeout        time.Duration `mapstructure:"timeout"`
+	AuthHeaderName string        `mapstructure:"auth_header_name"` // Custom auth header, e.g., "x-api-key" for Anthropic
 }
 
 // GetProvider retrieves provider config by name, checking both legacy and dynamic accounts
@@ -98,10 +98,6 @@ func (p *ProvidersConfig) GetProvider(name string) *ProviderConfig {
 	case "claude", "anthropic":
 		if p.Claude.APIKey != "" {
 			return &p.Claude
-		}
-	case "gemini":
-		if p.Gemini.APIKey != "" {
-			return &p.Gemini
 		}
 	case "deepseek":
 		if p.DeepSeek.APIKey != "" {
@@ -141,9 +137,6 @@ func (p *ProvidersConfig) ListProviders() []string {
 	}
 	if p.Claude.APIKey != "" {
 		providers = append(providers, "claude")
-	}
-	if p.Gemini.APIKey != "" {
-		providers = append(providers, "gemini")
 	}
 	if p.DeepSeek.APIKey != "" {
 		providers = append(providers, "deepseek")

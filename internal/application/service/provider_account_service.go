@@ -54,7 +54,7 @@ func (s *ProviderAccountService) Stop() {
 // CreateAccount 创建新的 Provider 账户
 func (s *ProviderAccountService) CreateAccount(ctx context.Context, provider, name, apiKey, baseURL string, priority int, monthlyLimit *decimal.Decimal) (*entity.ProviderAccount, error) {
 	// 验证 provider
-	validProviders := []string{"openai", "anthropic", "gemini", "deepseek", "glm"}
+	validProviders := []string{"openai", "anthropic", "deepseek", "glm"}
 	isValid := false
 	for _, p := range validProviders {
 		if p == provider {
@@ -441,7 +441,7 @@ func (s *ProviderAccountService) GetProviderStatus(ctx context.Context, provider
 
 // GetAllProvidersStatus 获取所有 Provider 状态
 func (s *ProviderAccountService) GetAllProvidersStatus(ctx context.Context) (map[string]interface{}, error) {
-	providers := []string{"openai", "anthropic", "gemini", "deepseek", "glm"}
+	providers := []string{"openai", "anthropic", "deepseek", "glm"}
 	result := make(map[string]interface{})
 
 	for _, p := range providers {
@@ -577,4 +577,87 @@ func (s *ProviderAccountService) decryptAPIKey(account *entity.ProviderAccount) 
 			account.APIKey = dec
 		}
 	}
+}
+
+// ==================== 独享账号 ====================
+
+// CreateDedicatedAccount 创建独享Provider账号（租户或用户）
+func (s *ProviderAccountService) CreateDedicatedAccount(ctx context.Context, provider, name, apiKey, baseURL string, tenantID, userID uuid.UUID) (*entity.ProviderAccount, error) {
+	encryptedAPIKey := apiKey
+	if s.encryptKey != nil && apiKey != "" {
+		enc, err := crypto.EncryptString(apiKey, s.encryptKey)
+		if err == nil {
+			encryptedAPIKey = enc
+		}
+	}
+
+	account := &entity.ProviderAccount{
+		ID:        uuid.New(),
+		Provider:  provider,
+		Name:      name,
+		APIKey:    encryptedAPIKey,
+		BaseURL:   baseURL,
+		Status:    "active",
+		IsDefault: true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if tenantID != uuid.Nil {
+		account.TenantID = &tenantID
+	}
+	if userID != uuid.Nil {
+		account.UserID = &userID
+	}
+
+	if err := s.repo.Create(ctx, account); err != nil {
+		return nil, fmt.Errorf("failed to create dedicated account: %w", err)
+	}
+	return account, nil
+}
+
+// UpdateDedicatedAccount 更新独享账号
+func (s *ProviderAccountService) UpdateDedicatedAccount(ctx context.Context, id uuid.UUID, provider, name, apiKey, baseURL string) (*entity.ProviderAccount, error) {
+	account, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	encryptedAPIKey := apiKey
+	if s.encryptKey != nil && apiKey != "" {
+		enc, err := crypto.EncryptString(apiKey, s.encryptKey)
+		if err == nil {
+			encryptedAPIKey = enc
+		}
+	}
+
+	account.Provider = provider
+	account.Name = name
+	account.APIKey = encryptedAPIKey
+	account.BaseURL = baseURL
+	account.UpdatedAt = time.Now()
+
+	if err := s.repo.Update(ctx, account); err != nil {
+		return nil, err
+	}
+	return account, nil
+}
+
+// ListDedicatedByTenant 列出租户独享账号
+func (s *ProviderAccountService) ListDedicatedByTenant(ctx context.Context, tenantID uuid.UUID) ([]entity.ProviderAccount, error) {
+	return s.repo.ListDedicatedByTenant(ctx, tenantID)
+}
+
+// ListDedicatedByUser 列出用户独享账号
+func (s *ProviderAccountService) ListDedicatedByUser(ctx context.Context, userID uuid.UUID) ([]entity.ProviderAccount, error) {
+	return s.repo.ListDedicatedByUser(ctx, userID)
+}
+
+// SetTenantUseDedicated 设置租户是否使用独享账号
+func (s *ProviderAccountService) SetTenantUseDedicated(ctx context.Context, tenantID uuid.UUID, enabled bool) error {
+	return s.repo.UpdateUseDedicatedTenant(ctx, tenantID, enabled)
+}
+
+// SetUserUseDedicated 设置用户是否使用独享账号
+func (s *ProviderAccountService) SetUserUseDedicated(ctx context.Context, userID uuid.UUID, enabled bool) error {
+	return s.repo.UpdateUseDedicatedUser(ctx, userID, enabled)
 }

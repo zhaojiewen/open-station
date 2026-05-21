@@ -86,14 +86,14 @@ func (s *MCPService) readUserResource(ctx context.Context, session *MCPSession, 
 		return string(jsonData), nil
 
 	case "balance":
-		balance, err := s.billingService.CheckBalance(ctx, session.TenantID)
+		balance, err := s.billingService.CheckBalance(ctx, session.UserID)
 		if err != nil {
 			return "", err
 		}
 		data := map[string]interface{}{
-			"tenant_id": session.TenantID.String(),
-			"balance":   balance.String(),
-			"currency":  "USD",
+			"user_id":  session.UserID.String(),
+			"balance":  balance.String(),
+			"currency": "USD",
 		}
 		jsonData, _ := json.MarshalIndent(data, "", "  ")
 		return string(jsonData), nil

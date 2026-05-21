@@ -71,6 +71,9 @@ func (m *MockAsyncAPIKeyRepo) IncrementDailyTokens(ctx context.Context, id uuid.
 	return nil
 }
 func (m *MockAsyncAPIKeyRepo) ResetDailyTokens(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockAsyncAPIKeyRepo) UpdateProviderUsage(ctx context.Context, id uuid.UUID, provider string, tokens int64, cost decimal.Decimal) error {
+	return nil
+}
 
 var _ repository.APIKeyRepository = (*MockAsyncAPIKeyRepo)(nil)
 
@@ -91,6 +94,7 @@ func createMockBillingService() *BillingService {
 
 	return NewBillingService(
 		tenantRepo,
+		NewMockUserRepo(),
 		NewMockUsageRepo(),
 		NewMockBillRepo(),
 		NewMockRechargeRepo(),
@@ -162,7 +166,7 @@ func TestAsyncBillingQueue_EnqueueTokenUpdate(t *testing.T) {
 	akRepo := NewMockAsyncAPIKeyRepo()
 	q := NewAsyncBillingQueue(bs, akRepo, 100, 10, time.Second)
 
-	if !q.EnqueueTokenUpdate(TokenUpdateEvent{APIKeyID: uuid.New(), Tokens: 100}) {
+	if !q.EnqueueTokenUpdate(TokenUpdateEvent{APIKeyID: uuid.New(), Provider: "openai", Tokens: 100, Cost: decimal.Zero}) {
 		t.Fatal("should enqueue token update successfully")
 	}
 }
@@ -172,9 +176,9 @@ func TestAsyncBillingQueue_EnqueueTokenUpdate_Full(t *testing.T) {
 	akRepo := NewMockAsyncAPIKeyRepo()
 	q := NewAsyncBillingQueue(bs, akRepo, 1, 10, time.Second)
 
-	q.EnqueueTokenUpdate(TokenUpdateEvent{APIKeyID: uuid.New(), Tokens: 1})
+	q.EnqueueTokenUpdate(TokenUpdateEvent{APIKeyID: uuid.New(), Provider: "openai", Tokens: 1, Cost: decimal.Zero})
 
-	if q.EnqueueTokenUpdate(TokenUpdateEvent{APIKeyID: uuid.New(), Tokens: 2}) {
+	if q.EnqueueTokenUpdate(TokenUpdateEvent{APIKeyID: uuid.New(), Provider: "openai", Tokens: 2, Cost: decimal.Zero}) {
 		t.Fatal("should return false when token queue is full")
 	}
 }
@@ -185,7 +189,7 @@ func TestAsyncBillingQueue_QueueBillingAsync(t *testing.T) {
 	q := NewAsyncBillingQueue(bs, akRepo, 100, 10, time.Second)
 
 	q.QueueBillingAsync(uuid.New(), uuid.New(), uuid.New(),
-		"req-1", "openai", "gpt-4", 100, 50, 200, 200)
+		"req-1", "openai", "gpt-4", 100, 50, 0, 0, 200, 200)
 }
 
 func TestAsyncBillingQueue_QueueTokenUpdateAsync(t *testing.T) {
@@ -193,7 +197,7 @@ func TestAsyncBillingQueue_QueueTokenUpdateAsync(t *testing.T) {
 	akRepo := NewMockAsyncAPIKeyRepo()
 	q := NewAsyncBillingQueue(bs, akRepo, 100, 10, time.Second)
 
-	q.QueueTokenUpdateAsync(uuid.New(), 500)
+	q.QueueTokenUpdateAsync(uuid.New(), "openai", 500, decimal.Zero)
 }
 
 func TestAsyncBillingQueue_GetQueueStats(t *testing.T) {
@@ -216,7 +220,7 @@ func TestAsyncBillingQueue_BillingWorker(t *testing.T) {
 	defer q.Stop()
 
 	q.QueueBillingAsync(uuid.New(), uuid.New(), uuid.New(),
-		"req-worker", "openai", "gpt-4", 100, 50, 200, 200)
+		"req-worker", "openai", "gpt-4", 100, 50, 0, 0, 200, 200)
 
 	time.Sleep(100 * time.Millisecond)
 }

@@ -27,4 +27,13 @@ type ProviderAccountRepository interface {
 	RecordSuccess(ctx context.Context, id uuid.UUID) error
 	ResetMonthlyUsage(ctx context.Context) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string) error
+
+	// Dedicated account queries
+	GetDedicatedByTenant(ctx context.Context, tenantID uuid.UUID, provider string) (*entity.ProviderAccount, error)
+	GetDedicatedByUser(ctx context.Context, userID uuid.UUID, provider string) (*entity.ProviderAccount, error)
+	ListDedicatedByTenant(ctx context.Context, tenantID uuid.UUID) ([]entity.ProviderAccount, error)
+	ListDedicatedByUser(ctx context.Context, userID uuid.UUID) ([]entity.ProviderAccount, error)
+	ListPublicByProvider(ctx context.Context, provider string) ([]entity.ProviderAccount, error)
+	UpdateUseDedicatedTenant(ctx context.Context, tenantID uuid.UUID, enabled bool) error
+	UpdateUseDedicatedUser(ctx context.Context, userID uuid.UUID, enabled bool) error
 }

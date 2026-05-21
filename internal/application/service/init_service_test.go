@@ -111,11 +111,10 @@ func TestInitService_DefaultModels(t *testing.T) {
 		// Default models should include:
 		// - OpenAI models (GPT-4, GPT-3.5)
 		// - Anthropic models (Claude)
-		// - Google models (Gemini)
 		// - DeepSeek models
 		// - GLM models
 
-		providers := []string{"openai", "anthropic", "gemini", "deepseek", "glm"}
+		providers := []string{"openai", "anthropic", "deepseek", "glm"}
 		for _, provider := range providers {
 			t.Logf("Should load models for provider: %s", provider)
 		}

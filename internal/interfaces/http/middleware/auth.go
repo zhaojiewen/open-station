@@ -83,6 +83,86 @@ func AuthMiddleware(authService *auth.AuthService, safeService *ratelimit.SafeSe
 	}
 }
 
+// APITypeAuthMiddleware validates API keys based on the API type in the URL path.
+// For "claude" API type, it checks x-api-key header first (Anthropic-native auth),
+// falling back to Authorization: Bearer. For all other API types, it uses
+// Authorization: Bearer only. The middleware must be placed on a route group with
+// :api path parameter (e.g., "/:api") so c.Param("api") is available.
+func APITypeAuthMiddleware(authService *auth.AuthService, safeService *ratelimit.SafeService, failedAuthCfg *config.FailedAuthConfig) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		apiType := c.Param("api")
+
+		var apiKey string
+		if apiType == "claude" {
+			// For Claude-native clients, check x-api-key header first
+			apiKey = c.GetHeader("x-api-key")
+		}
+		if apiKey == "" {
+			// Default: Authorization: Bearer <key>
+			authHeader := c.GetHeader("Authorization")
+			if authHeader == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error":   apperrors.ErrUnauthorized.Code,
+					"message": apperrors.ErrUnauthorized.Message,
+				})
+				c.Abort()
+				return
+			}
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				apiKey = strings.TrimPrefix(authHeader, "Bearer ")
+			} else {
+				apiKey = authHeader
+			}
+		}
+
+		key, user, tenant, err := authService.ValidateAPIKey(c.Request.Context(), apiKey)
+		if err != nil {
+			if safeService != nil && failedAuthCfg != nil {
+				clientIP := c.ClientIP()
+				wasBlocked, recErr := safeService.RecordAuthFailure(
+					c.Request.Context(), clientIP,
+					failedAuthCfg.WindowS,
+					failedAuthCfg.MaxAttempts,
+					failedAuthCfg.BlockDurationS,
+				)
+				if recErr != nil {
+					logger.Warn("safe: failed to record auth failure",
+						zap.String("ip", clientIP), zap.Error(recErr))
+				} else if wasBlocked {
+					logger.Warn("safe: IP auto-blocked due to repeated auth failures",
+						zap.String("ip", clientIP))
+				}
+			}
+
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error":   apperrors.ErrInvalidAPIKey.Code,
+				"message": err.Error(),
+			})
+			c.Abort()
+			return
+		}
+
+		c.Set("api_key_id", key.ID)
+		c.Set("api_key", key)
+		c.Set("user_id", user.ID)
+		c.Set("user", user)
+		c.Set("tenant_id", tenant.ID)
+		c.Set("tenant", tenant)
+
+		if err := authService.UpdateAPIKeyLastUsed(c.Request.Context(), key.ID); err != nil {
+		}
+
+		if safeService != nil {
+			if resetErr := safeService.ResetAuthFailures(c.Request.Context(), c.ClientIP()); resetErr != nil {
+				logger.Warn("safe: failed to reset auth failures",
+					zap.String("ip", c.ClientIP()), zap.Error(resetErr))
+			}
+		}
+
+		c.Next()
+	}
+}
+
 func AdminOnlyMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := GetUser(c)

@@ -408,7 +408,7 @@ func TestProviderAccount_StatusValues(t *testing.T) {
 }
 
 func TestProviderAccount_ProviderValues(t *testing.T) {
-	providers := []string{"openai", "anthropic", "gemini", "deepseek", "glm"}
+	providers := []string{"openai", "anthropic", "deepseek", "glm"}
 
 	for _, provider := range providers {
 		account := ProviderAccount{Provider: provider}

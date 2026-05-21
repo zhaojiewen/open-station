@@ -225,6 +225,15 @@ func (m *MockBAUserRepo) IncrementTokensUsed(ctx context.Context, id uuid.UUID, 
 }
 func (m *MockBAUserRepo) IncrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error  { return nil }
 func (m *MockBAUserRepo) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error  { return nil }
+func (m *MockBAUserRepo) GetBalance(ctx context.Context, id uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Zero, nil
+}
+func (m *MockBAUserRepo) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
+func (m *MockBAUserRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
 
 var _ repository.UserRepository = (*MockBAUserRepo)(nil)
 
@@ -284,6 +293,9 @@ func (m *MockBAAPIKeyRepo) IncrementDailyTokens(ctx context.Context, id uuid.UUI
 	return nil
 }
 func (m *MockBAAPIKeyRepo) ResetDailyTokens(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockBAAPIKeyRepo) UpdateProviderUsage(ctx context.Context, id uuid.UUID, provider string, tokens int64, cost decimal.Decimal) error {
+	return nil
+}
 
 var _ repository.APIKeyRepository = (*MockBAAPIKeyRepo)(nil)
 

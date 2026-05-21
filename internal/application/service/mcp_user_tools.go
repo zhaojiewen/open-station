@@ -11,7 +11,7 @@ import (
 )
 
 func (s *MCPService) toolCheckBalance(ctx context.Context, session *MCPSession) (*mcp.CallToolResult, error) {
-	balance, err := s.billingService.CheckBalance(ctx, session.TenantID)
+	balance, err := s.billingService.CheckBalance(ctx, session.UserID)
 	if err != nil {
 		return nil, err
 	}

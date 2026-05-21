@@ -462,6 +462,91 @@ func (m *MockModelRepository) GetPricing(ctx context.Context, provider, modelID 
 	return nil, errors.New("model not found")
 }
 
+type MockUserRepo struct {
+	users   map[uuid.UUID]*entity.User
+	balance map[uuid.UUID]decimal.Decimal
+}
+
+func NewMockUserRepo() *MockUserRepo {
+	return &MockUserRepo{
+		users:   make(map[uuid.UUID]*entity.User),
+		balance: make(map[uuid.UUID]decimal.Decimal),
+	}
+}
+
+func (m *MockUserRepo) Create(ctx context.Context, user *entity.User) error {
+	user.ID = uuid.New()
+	m.users[user.ID] = user
+	m.balance[user.ID] = user.Balance
+	return nil
+}
+func (m *MockUserRepo) GetByID(ctx context.Context, id uuid.UUID) (*entity.User, error) {
+	if u, ok := m.users[id]; ok {
+		return u, nil
+	}
+	return nil, errors.New("user not found")
+}
+func (m *MockUserRepo) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
+	return nil, nil
+}
+func (m *MockUserRepo) GetByVerificationToken(ctx context.Context, token string) (*entity.User, error) {
+	return nil, nil
+}
+func (m *MockUserRepo) Update(ctx context.Context, user *entity.User) error {
+	m.users[user.ID] = user
+	return nil
+}
+func (m *MockUserRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	delete(m.users, id)
+	delete(m.balance, id)
+	return nil
+}
+func (m *MockUserRepo) List(ctx context.Context, tenantID uuid.UUID, page, pageSize int) ([]entity.User, int64, error) {
+	return nil, 0, nil
+}
+func (m *MockUserRepo) UpdateLastLogin(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockUserRepo) IncrementMonthlyBudgetUsed(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
+func (m *MockUserRepo) IncrementDailyBudgetUsed(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
+func (m *MockUserRepo) ResetMonthlyBudgetUsed(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockUserRepo) ResetDailyBudgetUsed(ctx context.Context, id uuid.UUID) error   { return nil }
+func (m *MockUserRepo) GetBudgetUsage(ctx context.Context, id uuid.UUID) (decimal.Decimal, decimal.Decimal, int64, error) {
+	return decimal.Zero, decimal.Zero, 0, nil
+}
+func (m *MockUserRepo) IncrementTokensUsed(ctx context.Context, id uuid.UUID, tokens int64) error {
+	return nil
+}
+func (m *MockUserRepo) IncrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error  { return nil }
+func (m *MockUserRepo) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error  { return nil }
+func (m *MockUserRepo) GetBalance(ctx context.Context, id uuid.UUID) (decimal.Decimal, error) {
+	if bal, ok := m.balance[id]; ok {
+		return bal, nil
+	}
+	return decimal.Zero, errors.New("user not found")
+}
+func (m *MockUserRepo) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	current, ok := m.balance[id]
+	if !ok {
+		return errors.New("user not found")
+	}
+	if current.LessThan(amount) {
+		return apperrors.ErrInsufficientBalance
+	}
+	m.balance[id] = current.Sub(amount)
+	return nil
+}
+func (m *MockUserRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	current, ok := m.balance[id]
+	if !ok {
+		return errors.New("user not found")
+	}
+	m.balance[id] = current.Add(amount)
+	return nil
+}
+
 // Tests
 
 func TestNewBillingService(t *testing.T) {
@@ -471,7 +556,7 @@ func TestNewBillingService(t *testing.T) {
 	rechargeRepo := NewMockRechargeRepo()
 	modelRepo := NewMockModelRepo()
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	if service == nil {
 		t.Error("NewBillingService should not return nil")
@@ -495,7 +580,7 @@ func TestBillingService_CalculateCost(t *testing.T) {
 	}
 	modelRepo.Create(context.Background(), model)
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	tests := []struct {
 		name            string
@@ -533,7 +618,7 @@ func TestBillingService_CalculateCost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cost, err := service.CalculateCost(context.Background(), tt.provider, tt.modelID, tt.promptTokens, tt.completionTokens)
+			cost, err := service.CalculateCost(context.Background(), tt.provider, tt.modelID, tt.promptTokens, tt.completionTokens, 0, 0)
 
 			if tt.wantErr {
 				if err == nil {
@@ -568,23 +653,28 @@ func TestBillingService_CalculateCost(t *testing.T) {
 
 func TestBillingService_CheckBalance(t *testing.T) {
 	tenantRepo := NewMockTenantRepo()
+	userRepo := NewMockUserRepo()
 	usageRepo := NewMockUsageRepo()
 	billRepo := NewMockBillRepo()
 	rechargeRepo := NewMockRechargeRepo()
 	modelRepo := NewMockModelRepo()
 
-	// Create a tenant
 	tenant := &entity.Tenant{
 		Name:   "Test Tenant",
 		Slug:   "test-tenant",
 		Status: "active",
 	}
 	tenantRepo.Create(context.Background(), tenant)
-	tenantRepo.UpdateBalance(context.Background(), tenant.ID, decimal.NewFromInt(100))
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	testUser := &entity.User{
+		Email:   "test@test.com",
+		Balance: decimal.NewFromInt(100),
+	}
+	userRepo.Create(context.Background(), testUser)
 
-	balance, err := service.CheckBalance(context.Background(), tenant.ID)
+	service := NewBillingService(tenantRepo, userRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+
+	balance, err := service.CheckBalance(context.Background(), testUser.ID)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -608,7 +698,7 @@ func TestBillingService_Recharge(t *testing.T) {
 	}
 	tenantRepo.Create(context.Background(), tenant)
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	tests := []struct {
 		name          string
@@ -699,7 +789,7 @@ func TestBillingService_GetUsage(t *testing.T) {
 		usageRepo.Create(context.Background(), record)
 	}
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	start := now.Add(-1 * time.Hour)
 	end := now.Add(1 * time.Hour)
@@ -744,7 +834,7 @@ func TestBillingService_GenerateBill(t *testing.T) {
 	}
 	usageRepo.Create(context.Background(), record)
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	start := now.Add(-1 * time.Hour)
 	end := now.Add(1 * time.Hour)
@@ -802,7 +892,7 @@ func TestBillingService_GetBills(t *testing.T) {
 		billRepo.Create(context.Background(), bill)
 	}
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	bills, total, err := service.GetBills(context.Background(), tenant.ID, 1, 10)
 	if err != nil {
@@ -839,7 +929,7 @@ func TestBillingService_GetRechargeRecords(t *testing.T) {
 		rechargeRepo.Create(context.Background(), record)
 	}
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	records, total, err := service.GetRechargeRecords(context.Background(), tenant.ID, 1, 10)
 	if err != nil {
@@ -857,6 +947,7 @@ func TestBillingService_GetRechargeRecords(t *testing.T) {
 
 func TestBillingService_RecordUsage_InsufficientBalance(t *testing.T) {
 	tenantRepo := NewMockTenantRepo()
+	userRepo := NewMockUserRepo()
 	usageRepo := NewMockUsageRepo()
 	billRepo := NewMockBillRepo()
 	rechargeRepo := NewMockRechargeRepo()
@@ -864,8 +955,9 @@ func TestBillingService_RecordUsage_InsufficientBalance(t *testing.T) {
 
 	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
 	tenantRepo.Create(context.Background(), tenant)
-	// Set zero balance
-	tenantRepo.balance[tenant.ID] = decimal.Zero
+
+	testUser := &entity.User{Email: "test@test.com", Balance: decimal.Zero}
+	userRepo.Create(context.Background(), testUser)
 
 	// Add model pricing
 	model := &entity.Model{
@@ -876,20 +968,19 @@ func TestBillingService_RecordUsage_InsufficientBalance(t *testing.T) {
 	}
 	modelRepo.Create(context.Background(), model)
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, userRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
 
-	userID := uuid.New()
 	apiKeyID := uuid.New()
 
 	_, err := service.RecordUsage(
 		context.Background(),
 		tenant.ID,
-		userID,
+		testUser.ID,
 		apiKeyID,
 		"req-123",
 		"openai",
 		"gpt-4",
-		1000, 500,
+		1000, 500, 0, 0,
 		100, 200,
 	)
 
@@ -920,6 +1011,7 @@ func TestErrorVariables(t *testing.T) {
 
 func TestBillingService_RecordUsage_Success(t *testing.T) {
 	tenantRepo := NewMockTenantRepo()
+	userRepo := NewMockUserRepo()
 	usageRepo := NewMockUsageRepo()
 	billRepo := NewMockBillRepo()
 	rechargeRepo := NewMockRechargeRepo()
@@ -927,7 +1019,9 @@ func TestBillingService_RecordUsage_Success(t *testing.T) {
 
 	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
 	tenantRepo.Create(context.Background(), tenant)
-	tenantRepo.UpdateBalance(context.Background(), tenant.ID, decimal.NewFromFloat(100))
+
+	testUser := &entity.User{Email: "test@test.com", Balance: decimal.NewFromFloat(100)}
+	userRepo.Create(context.Background(), testUser)
 
 	model := &entity.Model{
 		Provider:        "openai",
@@ -937,19 +1031,18 @@ func TestBillingService_RecordUsage_Success(t *testing.T) {
 	}
 	modelRepo.Create(context.Background(), model)
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, userRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
 
-	userID := uuid.New()
 	apiKeyID := uuid.New()
 	record, err := service.RecordUsage(
 		context.Background(),
 		tenant.ID,
-		userID,
+		testUser.ID,
 		apiKeyID,
 		"req-success",
 		"openai",
 		"gpt-4",
-		1000, 500,
+		1000, 500, 0, 0,
 		100, 200,
 	)
 
@@ -969,8 +1062,8 @@ func TestBillingService_RecordUsage_Success(t *testing.T) {
 		t.Errorf("tenant ID = %v, want %v", record.TenantID, tenant.ID)
 	}
 
-	// Balance should have been deducted
-	balance, _ := tenantRepo.GetBalance(context.Background(), tenant.ID)
+	// User balance should have been deducted
+	balance, _ := userRepo.GetBalance(context.Background(), testUser.ID)
 	expectedCost := decimal.NewFromFloat(0.03).Mul(decimal.NewFromInt(1000)).Div(decimal.NewFromInt(1000)).
 		Add(decimal.NewFromFloat(0.06).Mul(decimal.NewFromInt(500)).Div(decimal.NewFromInt(1000)))
 	expectedBalance := decimal.NewFromFloat(100).Sub(expectedCost)
@@ -987,8 +1080,6 @@ func TestBillingService_RecordUsage_Rollback(t *testing.T) {
 
 	tenant := &entity.Tenant{Name: "Test", Slug: "test"}
 	tenantRepo.Create(context.Background(), tenant)
-	initialBalance := decimal.NewFromFloat(100)
-	tenantRepo.UpdateBalance(context.Background(), tenant.ID, initialBalance)
 
 	model := &entity.Model{
 		Provider:        "openai",
@@ -1001,19 +1092,23 @@ func TestBillingService_RecordUsage_Rollback(t *testing.T) {
 	// Create a failing usage repo
 	usageRepo := &MockUsageRepositoryFailing{}
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	userRepo := NewMockUserRepo()
+	initialBalance := decimal.NewFromFloat(100)
+	testUser := &entity.User{Email: "test@test.com", Balance: initialBalance}
+	userRepo.Create(context.Background(), testUser)
 
-	userID := uuid.New()
+	service := NewBillingService(tenantRepo, userRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+
 	apiKeyID := uuid.New()
 	_, err := service.RecordUsage(
 		context.Background(),
 		tenant.ID,
-		userID,
+		testUser.ID,
 		apiKeyID,
 		"req-rollback",
 		"openai",
 		"gpt-4",
-		1000, 500,
+		1000, 500, 0, 0,
 		100, 200,
 	)
 
@@ -1021,8 +1116,8 @@ func TestBillingService_RecordUsage_Rollback(t *testing.T) {
 		t.Fatal("expected error from failing usage repo")
 	}
 
-	// Balance should have been rolled back
-	balance, _ := tenantRepo.GetBalance(context.Background(), tenant.ID)
+	// User balance should have been rolled back
+	balance, _ := userRepo.GetBalance(context.Background(), testUser.ID)
 	if !balance.Equals(initialBalance) {
 		t.Errorf("balance should have been rolled back to %v, got %v", initialBalance, balance)
 	}
@@ -1063,7 +1158,7 @@ func TestBillingService_RecordUsage_ModelNotFound(t *testing.T) {
 	tenantRepo.Create(context.Background(), tenant)
 	tenantRepo.UpdateBalance(context.Background(), tenant.ID, decimal.NewFromFloat(100))
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	_, err := service.RecordUsage(
 		context.Background(),
@@ -1073,7 +1168,7 @@ func TestBillingService_RecordUsage_ModelNotFound(t *testing.T) {
 		"req-unknown-model",
 		"unknown",
 		"unknown-model",
-		100, 50,
+		100, 50, 0, 0,
 		100, 200,
 	)
 
@@ -1106,7 +1201,7 @@ func TestBillingService_GetTotalCost(t *testing.T) {
 		usageRepo.Create(context.Background(), record)
 	}
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	start := now.Add(-1 * time.Hour)
 	end := now.Add(1 * time.Hour)
@@ -1147,7 +1242,7 @@ func TestBillingService_GenerateBill_Dedup(t *testing.T) {
 	}
 	usageRepo.Create(context.Background(), record)
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	start := now.Add(-1 * time.Hour)
 	end := now.Add(1 * time.Hour)
@@ -1184,10 +1279,10 @@ func TestBillingService_CalculateCost_EdgeCases(t *testing.T) {
 	}
 	modelRepo.Create(context.Background(), model)
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 
 	// Test with only prompt tokens
-	cost, err := service.CalculateCost(context.Background(), "openai", "gpt-4", 2000, 0)
+	cost, err := service.CalculateCost(context.Background(), "openai", "gpt-4", 2000, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1197,7 +1292,7 @@ func TestBillingService_CalculateCost_EdgeCases(t *testing.T) {
 	}
 
 	// Test with only completion tokens
-	cost, err = service.CalculateCost(context.Background(), "openai", "gpt-4", 0, 1000)
+	cost, err = service.CalculateCost(context.Background(), "openai", "gpt-4", 0, 1000, 0, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1207,7 +1302,7 @@ func TestBillingService_CalculateCost_EdgeCases(t *testing.T) {
 	}
 
 	// Test with large token counts
-	cost, err = service.CalculateCost(context.Background(), "openai", "gpt-4", 1000000, 500000)
+	cost, err = service.CalculateCost(context.Background(), "openai", "gpt-4", 1000000, 500000, 0, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1230,7 +1325,7 @@ func TestBillingService_Recharge_UpdateBalanceFailure(t *testing.T) {
 		MockRechargeRepository: *NewMockRechargeRepo(),
 	}
 
-	service := NewBillingService(tenantRepo, usageRepo, billRepo, rechargeRepo, modelRepo)
+	service := NewBillingService(tenantRepo, NewMockUserRepo(), usageRepo, billRepo, rechargeRepo, modelRepo)
 	_, err := service.Recharge(context.Background(), tenant.ID, decimal.NewFromInt(50), "card", "pay-1", "notes")
 
 	if err == nil {

@@ -125,6 +125,15 @@ func (m *mockUserRepoForVerification) GetBudgetUsage(ctx context.Context, id uui
 func (m *mockUserRepoForVerification) IncrementTokensUsed(ctx context.Context, id uuid.UUID, tokens int64) error { return nil }
 func (m *mockUserRepoForVerification) IncrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
 func (m *mockUserRepoForVerification) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *mockUserRepoForVerification) GetBalance(ctx context.Context, id uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Zero, nil
+}
+func (m *mockUserRepoForVerification) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
+func (m *mockUserRepoForVerification) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
 
 func TestNewEmailVerificationService(t *testing.T) {
 	mockUserRepo := newMockUserRepoForVerification()

@@ -231,6 +231,10 @@ func (m *MockAPIKeyRepository) ResetDailyTokens(ctx context.Context, id uuid.UUI
 	return nil
 }
 
+func (m *MockAPIKeyRepository) UpdateProviderUsage(ctx context.Context, id uuid.UUID, provider string, tokens int64, cost decimal.Decimal) error {
+	return nil
+}
+
 type MockUserRepository struct {
 	users   map[uuid.UUID]*entity.User
 	byEmail map[string]*entity.User
@@ -316,6 +320,15 @@ func (m *MockUserRepository) GetBudgetUsage(ctx context.Context, id uuid.UUID) (
 func (m *MockUserRepository) IncrementTokensUsed(ctx context.Context, id uuid.UUID, tokens int64) error { return nil }
 func (m *MockUserRepository) IncrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
 func (m *MockUserRepository) DecrementActiveAPIKeys(ctx context.Context, id uuid.UUID) error { return nil }
+func (m *MockUserRepository) GetBalance(ctx context.Context, id uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Zero, nil
+}
+func (m *MockUserRepository) DeductBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
+func (m *MockUserRepository) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
+	return nil
+}
 
 type MockTenantRepository struct {
 	tenants map[uuid.UUID]*entity.Tenant
